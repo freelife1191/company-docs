@@ -1,0 +1,136 @@
+@@startuml
+
+title "Stream Server 영상시청 시퀀스다이어그램"
+
+participant "Web Player" as webplayer
+participant cloudfront [
+    =AWS CloudFront 
+    ----
+    ""Live: live.shoplive.cloud""
+    ""Replay: resource.shoplive.cloud""
+    ""Config: config.shoplive.cloud""
+]
+participant lb [
+    =AWS ALB 
+    ----
+    ""shoplive-stream-live""
+]
+box "Stream Server" #LightGreen
+participant manager [
+    =Nginx RTMP
+    ----
+    ""Stream Manager""
+]
+participant httpserver [
+    =Node.js Express
+    ----
+    ""Http Server""
+]
+participant worker [
+    =Nginx RTMP
+    ----
+    ""Stream Worker""
+]
+end box
+box "Api Server" #LightBlue
+participant bo [
+    =Api Server
+    ----
+    ""Bussiness Objects""
+]
+
+webplayer -> cloudfront ++ : **<<Config JSON 파일 조회>>**\nconfig.shoplive.cloud/{accessKey}/{campaignKey}.json
+hnote right webplayer : **Config JSON 조회**
+return {campaignKey}.json #LightGrey
+
+alt#Gold #LightYellow **라이브방송**
+
+    == 라이브 방송 시청 ==
+
+    webplayer -> cloudfront ++ : **<<Live 방송중이면 liveUrl로 m3u8 조회>>**\nlive.shoplive.cloud/live/{streamKey}.m3u8
+        cloudfront -> lb ++
+            lb -> manager ++ : **<<라이브 방송 시청>>**\n/live/{streamKey}.m3u8
+                manager -> httpserver ++ : **<<Proxy Pass>>**/proxy/live
+                    httpserver -> bo ++ : **<<Worker 스트림 서버할당 IP 조회>>**\nGET /v2/live/event/stream/serverIp/${streamKey}?autoAllocate=${autoAllocate}
+                    return OK(IP), Fail(0)
+                    httpserver -> worker ++ : **<<Worker 스트림 서버 HTTP 접속>>**\n/${workerIp}/live/{streamKey}.m3u8
+                    return {streamKey}.m3u8
+                return
+            return
+        return
+    return {streamKey}.m3u8
+
+    loop #EXT-X-ENDLIST
+    
+    note over of worker
+    6초분의 영상파일을 1초씩 6개의 ts파일로 분할 전송
+    최소 6초정도 느리게 전송될 수 있음
+    네트워크 상황에 따라 더 지연될 수도 있음
+    end note
+
+    == EXT-X-ENDLIST를 받을때까지 반복수행 ==
+
+        webplayer -> cloudfront ++ : **<<라이브 방송 index.m3u8 조회>>**\nlive.shoplive.cloud/live/{streamkey}_{resolution}/index.m3u8
+            cloudfront -> lb ++
+                lb -> manager ++ 
+                    manager -> httpserver ++ : **<<Proxy Pass>>**/proxy/live
+                        httpserver -> bo ++ : **<<Worker 스트림 서버할당 IP 조회>>**\nGET /v2/live/event/stream/serverIp/${streamKey}?autoAllocate=${autoAllocate}
+                        return OK(IP), Fail(0)
+                        httpserver -> worker ++ : **<<Worker 스트림 서버 HTTP 접속>>**\n/${workerIp}/live/{streamKey}_{resolution}/index.m3u8
+                        return index.m3u8
+                    return
+                return
+            return
+        return index.m3u8
+
+        webplayer -> cloudfront ++ : **<<라이브 방송 시청 {timestamp}.ts>>**\nlive.shoplive.cloud/live/{streamkey}_{resolution}/{timestamp}.ts
+            cloudfront -> lb ++
+                lb -> manager ++ 
+                    manager -> httpserver ++ : **<<Proxy Pass>>**/proxy/live
+                        httpserver -> bo ++ : **<<Worker 스트림 서버할당 IP 조회>>**\nGET /v2/live/event/stream/serverIp/${streamKey}?autoAllocate=${autoAllocate}
+                        return OK(IP), Fail(0)
+                        httpserver -> worker ++ : **<<Worker 스트림 서버 HTTP 접속>>**\n/${workerIp}/live/{streamKey}_{resolution}/{timestamp}.ts
+                        return {timestamp}.ts
+                    return
+                return
+            return
+        return {timestamp}.ts
+    end
+else #GreenYellow **리플레이방송**
+
+    == 리플레이 방송 시청 ==
+
+    webplayer -> bo ++ : **<<리플레이를 위한 scenario.json 조회>>**\napi.shoplive.cloud/v1/replay/{accessKey}/{campaignKey}/scenario.json
+    return scenario.json
+
+    webplayer -> bo ++ : **<<리플레이는 API 서버에서 m3u8 조회>>**\napi.shoplive.cloud/v1/replay/{accessKey}/{campaignKey}/replay.m3u8
+    return replay.m3u8
+
+    rnote right of webplayer
+    리플레이는 **ndex.m3u8** 파일내에 리플레이를 위한 **ts**파일이 모두 들어있어서 
+    **index.m3u8**은 한번만 조회해서 가져온다
+    endrnote 
+
+    webplayer -> bo ++ : **<<리플레이 index.m3u8 조회>>**\napi.shoplive.cloud/v1/replay/{accessKey}/{campaignKey}/replay_{resolution}/{replayMode}/index.m3u8
+    return index.m3u8
+
+    loop #EXT-X-ENDLIST 
+
+        webplayer -> bo ++ : **<<리플레이용 대화, 상태 로그 조회>>**\napi.shoplive.cloud/v1/replay/{accessKey}/{campaignKey}/stream.json
+        return stream.json
+
+        webplayer -> bo ++ : **<<리플레이 누적 조회수, 누적 좋아요 수등 조회>>**\napi.shoplive.cloud/v1/replay/{accessKey}/{campaignKey}/adore.json
+        return adore.json
+
+        rnote right of webplayer
+        **EXT-X-ENDLIST까지 반복수행**
+        endrnote
+
+        webplayer -> cloudfront ++ :  **<<리플레이 시청 {timestamp}.ts>>**\nresource.shoplive.cloud/videos/hls/{streamkey}_{resolution}/{timestamp}.ts
+        return {timestamp}.ts
+
+    end
+
+end
+
+@@enduml

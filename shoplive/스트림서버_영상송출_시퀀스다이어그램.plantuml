@@ -1,0 +1,158 @@
+@@startuml
+
+title "Stream Server 영상송출 시퀀스다이어그램"
+
+participant "송출장비" as broadcast
+participant lb [
+    =AWS NLB
+    ----
+    ""stream-lb:1935/stream""
+]
+box "Stream Server" #LightGreen
+participant manager [
+    =Nginx RTMP
+    ----
+    ""Stream Manager""
+]
+participant httpserver [
+    =Node.js Express
+    ----
+    ""Http Server""
+]
+participant worker [
+    =Nginx RTMP
+    ----
+    ""Stream Worker""
+]
+end box
+box "Api Server" #LightBlue
+participant bo [
+    =Api Server
+    ----
+    ""Bussiness Objects""
+]
+participant async [
+    =Async Server
+]
+end box
+
+== Manager 스트림 송출 ==
+
+broadcast -> lb ++ : 방송송출
+
+    lb -> manager ++ : 방송송출
+
+        group exec_static(manager 가동시)
+        manager -> bo ++ : **<<스트림 서버 할당(on_server_alive)>>**\n/v2/live/event/onServerAlive?serverIp=${serverIp}&role=${role}"
+        return HttpStatus OK
+        end
+
+        group on_connect(manager 접속시)
+        manager -> httpserver ++ : on_connect
+
+        httpserver -> bo ++ : **<<IP 스트림 가능여부 확인(on_connect)>>**\nGET /v2/live/streamableByIp?ip=${req.body.addr}
+        return OK(1), UnAuthorized(0)
+        return
+        end
+
+        group exec_push(방송시작시)
+        manager -> bo ++ : **<<스트림 서버 상태 변경(on_stream_active)>>**\nlive_streams(ON_AIR), live_servers(BUSY)\n/v2/live/event/onStreamActive?streamKey=${streamKey}&clientIp=${addr}&role=${role}"
+        bo -> async: **<<스트림 서버 상태 전송(Kafka)>**\nTOPIC: RTMP_STREAM_ACTIVITY
+        return HttpStatus OK
+
+        manager -> bo ++ : **<<스트림 서버 할당여부 확인(check_streamable)>>**\nGET /v2/live/streamable/${streamKey}
+        return 할당(1), 미할당(0)
+        end
+
+        group on_publish(방송시작시 Worker로 비동기 HTTP Proxy 재생콜백 설정)
+            rnote right manager
+            Worker가 RTMP 스트림을 Proxy를 통해 비동기로 콜백을 만들고 전달하고 결과 코드를 반환할떄까지 중단함
+            endrnote
+            manager -> httpserver ++ : **<<Proxy 스트림으로 전달>>**\nPOST /proxy/stream
+                httpserver -> bo ++ : **<<Worker 스트림 서버할당 IP 조회>>**\nGET /v2/live/event/stream/serverIp/${streamKey}?autoAllocate=${autoAllocate}
+                return OK(IP), Fail(0)
+
+                httpserver -> worker ++ #FFBBBB : **<<Worker 스트림 송출>>**\nREDIRECT rtmp://${workerIp}:1935/stream/${streamKey}
+        end
+
+                    == Worker 스트림 송출 ==
+
+                    group exec_static(worker가동시)
+                        worker -> bo ++ : **<<스트림 서버 할당(on_server_alive)>>**\n/v2/live/event/onServerAlive?serverIp=${serverIp}&role=${role}"
+                        return HttpStatus OK
+                    end
+
+                    group on_connect(worker접속시)
+                        worker -> httpserver ++ #FFBBBB : on_connect
+                            httpserver -> bo ++ : **<<IP 스트림 가능여부 확인(on_connect)>>**\nGET /v2/live/streamableByIp?ip=${req.body.addr}
+                            return OK(1), UnAuthorized(0)
+                        return
+                    end
+
+                    group exec_push(방송시작시)
+                        worker -> bo ++ : **<<스트림 서버 상태 변경(on_stream_active)>>**\nlive_streams(ON_AIR), live_servers(BUSY)\n/v2/live/event/onStreamActive?streamKey=${streamKey}&clientIp=${addr}&role=${role}"
+                            bo -> async: **<<스트림 서버 상태 전송(Kafka)>**\nTOPIC: RTMP_STREAM_ACTIVITY
+                        return HttpStatus OK
+
+                        worker -> bo ++ : **<<스트림 서버 할당여부 확인(check_streamable)>>**\nGET /v2/live/streamable/${streamKey}
+                        return 할당(1), 미할당(0)
+
+                        group check_restreaming(start): Mirror서버 송출시작
+                            worker -> bo ++ : **<<스트림 Mirror서버 송출정보 조회>>**\n/v2/live/mirrors/${streamKey}
+                            return live_mirros
+                            alt#Gold #LightBlue **active == 1**
+                                rnote right worker
+                                mirror서버 스트림 송출 시작: $mirrorStreamUrl/$mirrorStreamKey
+                                endrnote
+                                worker -> bo ++ :**<<MIRROR_STATUS 값 ONGOING 변경>>**\nPUT /v2/live/mirrors/${liveMirrorId}/status/ONGOING
+                                return HttpStatus OK
+                            else #CBFF75 **active == 0**
+                                rnote right worker
+                                mirror서버 스트림 송출 중지: $mirrorStreamUrl/$mirrorStreamKey
+                                endrnote 
+                                worker -> bo ++ :**<<MIRROR_STATUS 값 PAUSE 변경>>**\nPUT /v2/live/mirrors/${liveMirrorId}/status/PAUSE
+                                return HttpStatus OK
+                            end
+                        end
+                    end
+
+                    group exec(resolution 별 영상송출)
+                        rnote right worker
+
+                        **rtmp://localhost:1935/stream/$name** 
+
+                        RTMP 스트림을 아래의 경로로 각각 전달해서 Resolution 별로 송출
+
+                        rtmp://localhost:1935/**hls-hd**/$name_**1080**p
+                        rtmp://localhost:1935/**hls**/$name_**720**p
+                        rtmp://localhost:1935/**hls**/$name_**480**p
+                        rtmp://localhost:1935/**hls**/$name_**320**p
+                        endrnote
+
+                        group hls(exec)
+                            group write_m3u8_detail(index.m3u8 ts파일정보 업데이트)
+                            loop
+                                worker -> bo ++ : **<<index.m3u8 resolution별 ts파일정보 업데이트>>**/v2/live/event/m3u8/${name}?folder=${folder}\nlive_transport_streams에 데이터 지속적으로 업데이트
+                                return HttpStatus OK
+                                end
+                                ... ~~1 second delay~~ ...
+                            end
+                        end
+
+                        group hls-hd(exec)
+                            group write_m3u8_detail(index.m3u8 ts파일정보 업데이트)
+                            loop
+                                worker -> bo ++ : **<<index.m3u8 resolution별 ts파일정보 업데이트>>**/v2/live/event/m3u8/${name}?folder=${folder}\nlive_transport_streams에 데이터 지속적으로 업데이트
+                                return HttpStatus OK
+                                ... ~~1 second delay~~ ...
+                                end
+                            end
+                        end
+                    end
+
+                return 
+            return
+    return
+return
+
+@@enduml

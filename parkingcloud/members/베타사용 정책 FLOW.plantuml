@@ -1,0 +1,67 @@
+@@startuml
+
+note right of 베타사용확인
+    헤더에 **use_exclusive**가 **false** 이면 베타사용확인 **PASS**
+end note
+== 데이터 조회 ==
+베타사용확인 -[#red]> 데이터베이스: 할인권 베타사용 리스트 조회 요청
+베타사용확인 <-[#0000FF]- 데이터베이스: 조회 요청 결과 응답
+note right #GreenYellow
+    할인키, 베타사용 여부를 조회하는데 
+    스토어 베타사용 여부가 있다면
+    주차장 베타사용 여부를 스토어 베타사용 여부로 덮어씀
+end note
+alt 할인권 베타사용 리스트 여부확인
+    note right of 베타사용확인: 할인권 베타사용 리스트 없으면 **베타사용확인 PASS**
+end
+베타사용확인 -[#red]> 데이터베이스: 적용 중인 할인권 리스트 조회 요청
+베타사용확인 <-[#0000FF]- 데이터베이스: 조회 요청 결과 응답
+note right #GreenYellow
+    현재 스토어에 적용되고 사용하려는 
+    할인키만 제외한 적용 중인 할인키 조회
+end note
+alt 적용 중인 할인권 리스트 여부확인
+    note right of 베타사용확인: 적용 중인 할인권 없으면 **베타사용확인 PASS**
+end
+== 데이터 가공 ==
+group 적용 중인 할인권 베타사용 리스트 추출
+    note right of 베타사용확인 #Aqua
+        할인권 베타사용 리스트에서 적용 중인 할인권 베타사용 리스트 추출
+    end note
+end
+alt 적용 중인 할인권 베타사용 여부가 Y 이면
+    note right of 베타사용확인 #Aqua
+        적용 중인 할인권 베타사용 여부 **true** 셋팅
+    end note
+else 적용 중인 할인권 베타사용 여부가 Y 가 아니면
+    note right of 베타사용확인 #Aqua
+        적용 중인 할인권 베타사용 여부 **false** 셋팅
+    end note
+end
+
+group 사용하려는 할인권 베타사용 여부 추출
+    note right of 베타사용확인 #Aqua
+        할인권 베타사용 리스트에서 사용하려는 할인권의 베타사용 여부 추출
+    end note
+end
+alt 사용하려는 할인권 베타사용 여부가 Y 이면
+    note right of 베타사용확인 #Aqua
+        사용하려는 할인권 베타사용 여부 **true** 셋팅
+    end note
+else 사용하려는 할인권 베타사용 여부가 Y 가 아니면
+    note right of 베타사용확인 #Aqua
+        사용하려는 할인권 베타사용 여부 **false** 셋팅
+    end note
+end
+==베타사용 확인==
+alt 베타사용 확인
+    note right of 베타사용확인
+        적용 중인 할인권 베타사용 여부가 **true** 이고 
+        사용하려는 할인권 베타사용 여부가 **true** 이면
+    end note
+    note right of 베타사용확인
+        베타사용 제한 메세지 리턴
+    end note
+end
+
+@@enduml

@@ -1,0 +1,85 @@
+@@startuml
+
+participant 사용자
+participant "할인권 적용 V1.2 서비스\n(setDiscountApply v1.2)" as setDiscountApply_v1_2
+participant "할인 적용/적용취소 공통 처리 모듈\n(DiscountCommonModule)" as DiscountCommonModule
+participant "할인권 적용 모듈\n(DiscountApplyModule)" as DiscountApplyModule
+participant "할인 적용/취소 유효성 체크 모듈\n(DiscountValidationModule)" as DiscountValidationModule
+participant "로컬 소켓 데이터 및 메세지 가공 모듈\n(LocalHelper)" as LocalHelper
+participant "로컬 메세지 전송/응답 소켓 모듈\n(MessageSendRetThread)" as MessageSendRetThread
+
+사용자 -> setDiscountApply_v1_2: 할인권 적용 요청
+
+activate setDiscountApply_v1_2
+setDiscountApply_v1_2 -> DiscountCommonModule: 할인권 적용 필수 데이터 가져오기 요청\n(getDiscountData)
+
+activate DiscountCommonModule
+DiscountCommonModule -> DiscountCommonModule: 1. 주차장 데이터 셋팅(ParkData)
+DiscountCommonModule -> DiscountCommonModule: 2. 할인 정보 데이터 셋팅(DiscData)
+DiscountCommonModule -> DiscountCommonModule: 할인권 잔여수량 확인\n잔여수량 - 사용수량
+DiscountCommonModule -> DiscountCommonModule: 3. 입출차 데이터 셋팅(InotData)
+DiscountCommonModule -> DiscountCommonModule: 4. 입출차 주차장 순번 기준\n 주차장 데이터 셋팅(InotParkData)
+DiscountCommonModule -> DiscountCommonModule: 5. 그룹 여부 셋팅(isGroup)
+DiscountCommonModule -[#0000FF]-> setDiscountApply_v1_2: 할인권 적용 필수 데이터 가져오기 완료
+deactivate DiscountCommonModule
+
+setDiscountApply_v1_2 -> DiscountApplyModule: 할인권 적용 유효성 검증 요청\n(dicountApplyValidationCheck)
+
+activate DiscountApplyModule
+DiscountApplyModule-> DiscountApplyModule: 할인정보 데이터 여부 확인
+DiscountApplyModule-> DiscountApplyModule: 입출차 데이터 여부 확인
+DiscountApplyModule-> DiscountValidationModule: 베타사용 정책 확인\n(exclusiveCheckStep)
+
+activate DiscountValidationModule
+DiscountValidationModule-[#0000FF]-> DiscountApplyModule: 베타사용 정책 통과
+deactivate DiscountValidationModule
+
+DiscountApplyModule-> DiscountApplyModule: 주차장 최대 사용가능 횟수\n초과여부 확인
+DiscountApplyModule-> DiscountApplyModule: 스토어 최대 사용가능 횟수\n초과여부 확인
+DiscountApplyModule-> DiscountValidationModule: 주차장 정책 확인\n(parkingPolicyCheckStep)
+
+activate DiscountValidationModule
+DiscountValidationModule -[#0000FF]-> DiscountApplyModule: 주차장 정책 통과
+deactivate DiscountValidationModule
+
+DiscountApplyModule-[#0000FF]-> setDiscountApply_v1_2: 할인권 적용 유효성 검증 통과
+deactivate DiscountApplyModule
+
+setDiscountApply_v1_2-> DiscountApplyModule: 할인권 적용 요청(discountApplyLocal)
+activate DiscountApplyModule
+
+loop 적용 요청수량 만큼 반복처리
+    DiscountApplyModule-> DiscountApplyModule: 적용할 할인권 데이터 확인\n(getStorDiscountInfo_v1_1)
+    DiscountApplyModule-> DiscountApplyModule: [APPLY_STATUS = N]\n적용할 할인권 사전등록\n로컬버전에 따라 트랜잭션 분기 \n(insertDiscountUsage)
+    DiscountApplyModule-> DiscountApplyModule: 로컬 소켓 전송 파라메터 셋팅
+== 노상 주차장(PARK_TYPE_CD == 2) 할인권 적용처리 시작 ==
+    DiscountApplyModule-> DiscountApplyModule: [PARK_TYPE_CD == 2]\n[APPLY_STATUS = Y]\n노상 주차장이면\n로컬 소켓 전송 없이 할인권 적용 처리
+== 노상 주차장(PARK_TYPE_CD == 2) 할인권 적용처리 종료 ==
+    DiscountApplyModule-> LocalHelper: [PARK_TYPE_CD != 2]\n노상 주차장이 아니면 로컬 소켓 전송처리 요청\n(sendLocalMessage)
+    
+    activate LocalHelper
+    LocalHelper-> LocalHelper: [INTF_RESULT = B]\n로컬 소켓 전송 인터페이스 등록\n(insertInterface)
+    LocalHelper-> LocalHelper: 할인내역 인터페이스 맵핑 데이터 등록\n(insertDiscountUsageInterfaceMapping)
+    
+    LocalHelper-> MessageSendRetThread: 로컬 소켓 전송\n(sendParkingDiscount)
+    
+    activate MessageSendRetThread
+    MessageSendRetThread-[#0000FF]-> LocalHelper: 로컬 소켓 응답
+    deactivate MessageSendRetThread
+    
+    LocalHelper-[#0000FF]-> DiscountApplyModule: 로컬 소켓 응답    
+    deactivate LocalHelper
+
+    DiscountApplyModule-> DiscountApplyModule: 로컬 소켓이 실패이면 \n실패 메세지 처리\n(failLocalMessageCheck)
+    DiscountApplyModule-> DiscountApplyModule: 로컬 소켓 성공 또는 실패 처리\n(socketResultAfterProcess)
+    DiscountApplyModule-> DiscountApplyModule: [APPLY_STATUS = Y]\n로컬 소켓 성공 응답이면\n적용완료 및 할인권 차감처리\n(applyDiscountDataUpdate)
+    DiscountApplyModule-> DiscountApplyModule: [APPLY_STATUS = F  또는 C]\n로컬 소켓 실패 응답이면\n적용실패및 실패 메세지 저장처리\n(undoDiscountUsage)
+end
+
+DiscountApplyModule-[#0000FF]-> setDiscountApply_v1_2: 할인권 적용완료 응답
+deactivate DiscountApplyModule
+
+setDiscountApply_v1_2 -[#0000FF]-> 사용자: 할인권 적용완료 응답
+deactivate setDiscountApply_v1_2
+
+@@enduml

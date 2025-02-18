@@ -1,0 +1,74 @@
+@@startuml
+
+participant 사용자
+participant "할인권 적용 취소 V1.2 서비스\n(setDiscountCancel v1.2)" as setDiscountCancel_v1_2
+participant "할인 적용/적용취소 공통 처리 모듈\n(DiscountCommonModule)" as DiscountCommonModule
+participant "할인권 적용 취소 모듈\n(DiscountApplyCancelModule)" as DiscountApplyCancelModule
+participant "할인 적용/취소 유효성 체크 모듈\n(DiscountValidationModule)" as DiscountValidationModule
+participant "로컬 소켓 데이터 및 메세지 가공 모듈\n(LocalHelper)" as LocalHelper
+participant "로컬 메세지 전송/응답 소켓 모듈\n(MessageSendRetThread)" as MessageSendRetThread
+
+사용자 -> setDiscountCancel_v1_2: 할인권 적용취소 요청
+
+activate setDiscountCancel_v1_2
+setDiscountCancel_v1_2 -> DiscountCommonModule: 할인권 적용 필수 데이터 가져오기 요청\n(getDiscountData)
+
+activate DiscountCommonModule
+DiscountCommonModule -> DiscountCommonModule: 1. 주차장 데이터 셋팅(ParkData)
+DiscountCommonModule -> DiscountCommonModule: 2. 할인 정보 데이터 셋팅(DiscData)
+DiscountCommonModule -> DiscountCommonModule: 3. 입출차 데이터 셋팅(InotData)
+DiscountCommonModule -> DiscountCommonModule: 4. 입출차 주차장 순번 기준\n 주차장 데이터 셋팅(InotParkData)
+DiscountCommonModule -> DiscountCommonModule: 5. 그룹 여부 셋팅(isGroup)
+DiscountCommonModule -[#0000FF]-> setDiscountCancel_v1_2: 할인권 적용 필수 데이터 가져오기 완료
+deactivate DiscountCommonModule
+
+setDiscountCancel_v1_2-> DiscountApplyCancelModule: 적용취소 할인권 정보 셋팅(setDiscountApplyCancel)
+
+activate DiscountApplyCancelModule
+DiscountApplyCancelModule-> DiscountApplyCancelModule: 적용취소 요청 횟수만큼 데이터 셋팅\n(getDiscountCancelList_v1_1)
+DiscountApplyCancelModule-[#0000FF]-> setDiscountCancel_v1_2: 적용취소 할인권 정보 셋팅완료 
+deactivate DiscountApplyCancelModule
+
+setDiscountCancel_v1_2-> DiscountApplyCancelModule: 할인권 적용취소 요청(discountApplyCancelLocal)
+
+activate DiscountApplyCancelModule
+DiscountApplyCancelModule-> DiscountValidationModule: 사전 정산 여부 확인(isEarlyPaid)
+
+activate DiscountValidationModule
+DiscountValidationModule-[#0000FF]-> DiscountApplyCancelModule: 사전 정산 여부 확인완료
+deactivate DiscountValidationModule
+
+loop 적용취소 요청수량 만큼 반복처리
+    DiscountApplyCancelModule-> DiscountApplyCancelModule: 로컬 소켓 전송 파라메터 셋팅
+== 노상 주차장(PARK_TYPE_CD == 2) 할인권 적용취소 처리 시작 ==
+    DiscountApplyCancelModule-> DiscountApplyCancelModule: [PARK_TYPE_CD == 2]\n[APPLY_STATUS = Y]\n노상 주차장이면\n로컬 소켓 전송 없이 할인권 적용취소 처리
+== 노상 주차장(PARK_TYPE_CD == 2) 할인권 적용취소 처리 종료 ==
+    DiscountApplyCancelModule-> DiscountApplyCancelModule: 로컬버전에 따라 취소 메세지 분기처리\n[v1.0 = parkingDiscountCancle]\n[v1.0이상 = storeDiscount]
+    DiscountApplyCancelModule-> LocalHelper: [PARK_TYPE_CD != 2]\n노상 주차장이 아니면 로컬 소켓 전송처리 요청\n(sendLocalMessage)
+
+    activate LocalHelper
+    LocalHelper-> LocalHelper: [INTF_RESULT = B]\n로컬 소켓 전송 인터페이스 등록\n(insertInterface)
+    LocalHelper-> LocalHelper: 할인내역 인터페이스 맵핑 데이터 등록\n(insertDiscountUsageInterfaceMapping)
+    
+    LocalHelper-> MessageSendRetThread: 로컬 소켓 전송\n(sendParkingDiscount)
+    
+    activate MessageSendRetThread
+    MessageSendRetThread-[#0000FF]-> LocalHelper: 로컬 소켓 응답
+    deactivate MessageSendRetThread
+    
+    LocalHelper-[#0000FF]-> DiscountApplyCancelModule: 로컬 소켓 응답
+    deactivate LocalHelper
+
+    DiscountApplyCancelModule-> DiscountApplyCancelModule: 로컬 소켓이 실패이면 \n실패 메세지 처리\n(failLocalMessageCheck)
+    DiscountApplyCancelModule-> DiscountApplyCancelModule: 로컬 소켓 성공 또는 실패 처리\n(socketResultAfterProcess)
+    DiscountApplyCancelModule-> DiscountApplyCancelModule: [APPLY_STATUS = C]\n로컬 소켓 성공 응답이면\n적용취소 및 할인권 원복처리\n(cancelDataUpdate)
+    DiscountApplyCancelModule-> DiscountApplyCancelModule: 로컬 소켓 실패 응답이면\n실패 메세지 처리\n(undoDiscountUsage)
+end
+
+DiscountApplyCancelModule-[#0000FF]-> setDiscountCancel_v1_2: 할인권 적용취소 완료 응답
+deactivate DiscountApplyCancelModule
+
+setDiscountCancel_v1_2 -[#0000FF]-> 사용자: 할인권 적용취소 완료 응답
+deactivate setDiscountCancel_v1_2
+
+@@enduml

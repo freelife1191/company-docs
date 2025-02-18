@@ -1,0 +1,235 @@
+@@startuml
+
+title "Stream Server 할당/해제 시퀀스다이어그램"
+
+participant "Web Admin" as web
+participant admin [
+    =Api Server
+    ----
+    ""Admin Server""
+]
+database database
+participant s3 [
+    =AWS S3
+    ----
+    ""shoplive-static""
+]
+
+web -> admin ++ : **<<할당서버정보 조회>>**GET /api/campaigns/${campaignId}/rtmp/streams/allocation
+  group 응답할 RtmpStreamAllocation List생성
+    admin -> database ++ : **<<rtmp_streams 조회>>**\nSELECT rtmp_streams WHRE campaign_id
+    return rtmp_streams
+    loop 
+      admin -> database ++ : **<<rtmp_strema_allocations 조회>>**\nSELECT rtmp_strema_allocations WHERE rtmp_stream_id
+      return rtmp_strema_allocations
+    end
+  end
+
+return 생성된 RtmpStreamAllocation List 리턴
+
+== 송출 서버 자동화 ==
+group issue(송출 서버 자동화 V2)
+  web -> admin ++ : **<<송출 서버 자동화: getRtmpStreamIssue>>**\nGET /api/campaigns/${campaignId}/rtmp/streams/issue
+    rnote right web #C8FFFF : 재발급시에도 동일한 로직 호출
+
+    admin -> database ++ : **<<SELECT episodes>>**
+    hnote right admin : episodes가 null이면 **ERROR.NOT_FOUND**
+    return episodes
+
+    admin -> admin : **<<스트림키 발급: StreamKeyGenerator>>**
+    hnote right admin : streamKey가 empty면 **ERROR.INVALID_ARGUMENT**
+
+    admin -> database ++ : **<<SELECT customers>>**
+    hnote right admin : customers가 null이면 **ERROR.CUSTOMER_NOT_FOUND**
+    return customers
+  return RtmpStream 객체 생성후 리턴
+
+  web -> admin ++ : **<<스트림서버 정보 조회>>**GET /api/campaigns/${campaignId}/rtmp/streams
+    admin -> database ++ : **<<rtmp_streams 조회>>**\nSELECT rtmp_streams WHRE campaign_id
+    return rtmp_streams
+  return RtmpStream 리스트
+end
+
+== 할당 ==
+group allocate(할당)
+  web -> admin ++ : **<<스트림서버 할당>>**POST /api/campaigns/${campaignId}/rtmp/streams/allocate/${rtmpStreamId}
+    admin -> database ++ : **<<rtmp_streams 조회>>**\nSELECT rtmp_streams WHRE campaign_id
+    hnote right admin : rtmp_streams가 null이면 **ERROR.RTMP_STREAM_NOT_FOUND**
+    return rtmp_streams
+
+    admin -> database ++ : **<<SELECT episodes>>**
+    hnote right admin
+    episodes가 null이면 **ERROR.NOT_FOUND**
+    EpisodeStatus.**CLOSED** 면 **ERROR.CAMPAIGN_ALREADY_CLOSED**
+    LiveStreamStatus.**READY** || LiveStreamStatus.**ON_AIR** 면 **ERROR.STREAM_SERVER_ALREADY_ALLOCATED**
+    endhnote
+    return episodes
+
+    admin -> database ++ : **<<할당된 스트림서버 정보 조회>>**\nSELECT rtmp_stream_allocations>>**
+    hnote right admin: rtmp_stream_allocations가 null이면 **ERROR.SERVER_ERROR()**
+    return rtmp_stream_allocations
+
+    group 할당 가능한 스트림서버 조회
+      admin -> database ++ : **<<IDLE(유휴 상태) 스트림서버 조회>>**\nSELECT stream_servers WHERE stream_server_status=IDLE
+      return stream_servers
+
+      alt#Gold #96FFFF **stream_servers == null**
+        rnote right admin: 전부 1개 이상 할당 상태일 때 maxAllocateCount를 만족하지 않은 streamServer가 있는지 확인
+        admin -> database ++ : **<<maxAllocateCount를 만족하지 않는 streamServer 조회>>**\nSELECT stream_server_id rtmp_stream_allocations
+        return stream_server_id
+
+        alt#Gold #CBFF75 **stream_server_id IsPositive**
+          admin -> database ++ : **<<스트림서버ID로 스트림서버 조회>>**\nSELECT stream_servers WHERE stream_server_id
+          return stream_servers
+        end
+      end
+      hnote right admin : stream_servers가 null이면 **ERROR.FAILED_TO_ALLOCATE_IDLE_STREAM_SERVER**
+    end
+
+    admin -> database ++ : **<<할당서버 등록>>**\nINSERT rtmp_stream_allocations
+    return int
+
+    admin -> database ++ : **<<스트림서버 업데이트>>**\nUPDATE stream_servers
+    hnote right admin: StreamServerStatus.**BUSY** 면 **BUSY(송출중)** 아니면 **RESERVE(송출 할당 상태)**
+    return int
+
+    admin -> database ++ : **<<rtmp_streams 업데이트>>**\nUPDATE rtmp_streams
+    hnote right admin: StreamUrl, LiveUrl, LiveStreamStatus.**READY(준비 완료)**
+    return int
+
+    admin -> database ++ : **<<할당이력 등록>>**\nINSERT (allocation=true) rtmp_stream_allocation_histories 
+    return int
+
+    admin -[#Blue]> s3: **<<Campaign Config JSON 생성및 S3업로드: uploadS3CampaignConfig>>**\nUPLOAD config/{accessKey}/{campaignKey}.json
+
+    group 응답할 RtmpStreamAllocation List생성
+      admin -> database ++ : **<<rtmp_streams 조회>>**\nSELECT rtmp_streams WHRE campaign_id
+      return rtmp_streams
+      loop 
+        admin -> database ++ : **<<rtmp_strema_allocations 조회>>**\nSELECT rtmp_strema_allocations WHERE rtmp_stream_id
+        return rtmp_strema_allocations
+      end
+    end
+
+  return 생성된 RtmpStreamAllocation List 리턴
+
+end
+
+== 해제 ==
+group deallocate(해제)
+  web -> admin ++ : **<<스트림서버 해제>>**PUT /api/campaigns/${campaignId}/rtmp/streams/deallocate/${rtmpStreamId}
+
+    admin -> database ++ : **<<SELECT rtmp_stream_allocations>>**
+    hnote right admin: rtmp_stream_allocations가 null이면 **ERROR.NO_ALLOCATED_STREAM_SERVER**
+    return rtmp_stream_allocations
+
+    admin -> database ++ : **<<rtmp_streams 조회>>**\nSELECT rtmp_streams WHRE campaign_id
+    hnote right admin : rtmp_streams가 null이면 **ERROR.RTMP_STREAM_NOT_FOUND**
+    return rtmp_streams
+
+    alt#Gold #96FFFF **rtmpStreamStatus == LiveStreamStatus.ON_AIR(방송중)**
+      admin -> database ++ : **<<episodes 조회>>**\nSELECT episodes WHERE campaign_id 
+      hnote right admin: EpisodeStatus.**CLOSED** 면 **ERROR.LIVE_ON_AIR**
+      return episodes
+    end
+
+    admin -> database ++ : **<<해제이력 등록>>**\nINSERT (allocation=false) rtmp_stream_allocation_histories
+    return int
+
+    admin -[#Red]> database ++ : **<<할당된 스트림서버 삭제>>**\nDELETE rtmp_stream_allocations WHERE rtmp_stream_id
+    return int
+
+    admin -> database ++ : **<<스트림서버ID로 스트림서버 조회>>**\nSELECT stream_servers WHERE stream_server_id
+    return stream_servers
+
+    alt#Gold #96FFFF **stream_servers == null**
+      admin -> database ++ : **<<할당된 스트림서버 StreamKey COUNT 조회>>**\nSELECT COUNT(DISTINCT stream_key) FROM rtmp_strema_allocations WHERE stream_server_id 
+      return allocateCount
+
+      alt#Gold #CBFF75 **allocateCount == 0**
+        admin -> database ++ : **<<스트림서버 IDLE(유휴 상태), shutdownable=true, allocate_count 업데이트>>**\nUPDATE **(stream_server_status=IDLE, shutdownable=true, allocate_count=0)** stream_servers
+        return int
+      else #FFE3EE **allocateCount != 0**
+        admin -> database ++ : **<<스트림서버 shutdownable=false, allocate_count 업데이트>>**\nUPDATE **(shutdownable=true, allocate_count=0)** stream_servers
+        return int
+      end
+    end
+
+    admin -> database ++ : **<<rtmp_streams EXPIRED(만료) 업데이트>>**\nUPDATE **(rtmp_stream_status=EXPIRED)** rtmp_streams
+    return int
+
+    group 응답할 RtmpStreamAllocation List생성
+      admin -> database ++ : **<<rtmp_streams 조회>>**\nSELECT rtmp_streams WHRE campaign_id
+      return rtmp_streams
+      loop 
+        admin -> database ++ : **<<rtmp_strema_allocations 조회>>**\nSELECT rtmp_strema_allocations WHERE rtmp_stream_id
+        return rtmp_strema_allocations
+      end
+    end
+
+  return 생성된 RtmpStreamAllocation List 리턴
+
+end
+
+group sync(동기화)
+  rnote right web #C8FFFF :  방송 설정 정보 저장시 호출
+  web -> admin ++ : **<<스트림서버 동기화>>**\nPUT /api/campaigns/${campaignId}/live/mirrors/sync
+
+    alt#Gold #96FFFF **IsEmpty.collection(rtmpStreams)**
+      rnote right admin #C8FFFF : rtmpStreams 리스트가 있으면
+      alt#Gold #CBFF75 **rtmpStream.getId() > 0**
+        rnote right admin #C8FFFF : rtmpStreams 리스트 첫 번째 id가 0보다 크면
+
+        group update
+          admin -> database ++ : **<<SELECT rtmp_streams WHERE id>>**
+          hnote right admin : rtmp_streams가 null이면 **ERROR.RTMP_STREAM_NOT_FOUND**
+          return rtmp_streams
+
+          hnote right admin: LiveStreamStatus.**ON_AIR** 면 **ERROR.LIVE_ON_AIR**
+
+          admin -> database ++ : **<<할당된 스트림서버 정보 조회>>**\nSELECT rtmp_stream_allocations WHERE stream_key>>**
+          return rtmp_stream_allocations
+
+          alt#Gold #FFE4B5 **rtmp_stream_allocations != null && rtmp_streams.getStreamKey != rtmp_stream_allocations.getStreamKey **
+            rnote right admin #C8FFFF : rtmp_streams의 stream_key와 rtmp_stream_allocations 의 stream_key가 같지 않으면
+            admin -> database ++ : **<<스트림서버ID로 스트림서버 조회>>**\nSELECT stream_servers WHERE stream_server_id
+            hnote right admin : stream_servers가 null이면 **ERROR.STREAM_SERVER_NOT_FOUND**
+            return stream_servers
+
+            rnote right admin #C8FFFF : 조회된 stream_servers 데이터와 rtmp_streams 데이터로 liveUrl 생성
+
+            admin -> database ++ : **<<스트림서버 할당당보 업데이트>>**\nUPDATE **(stream_key, admin_id, admin_name)** rtmp_stream_allocations>>**
+            return int
+          end
+
+          admin -> database ++ : **<<rtmp_streams 업데이트>>**\UPDATE rtmp_streams
+          return int
+        end
+      else #FFE3EE
+        admin -> database ++ : **<<rtmp_streams 조회>>**\nSELECT rtmp_streams WHRE campaign_id
+        return rtmp_streams
+
+        alt#Gold #FFE4B5 **IsNotEmpty.collection(rtmp_streams)**
+          rnote right admin #C8FFFF : rtmp_streams 가 있으면 rtmp_streams id를 셋팅
+          rnote right admin #C8FFFF : 위에 **update** 로직 호출
+        else
+          rnote right admin #C8FFFF : rtmp_streams 가 없으면 **issue** 로직을 호출해 스트림키 발급
+          group createOrUpdate
+            alt#Gold #CBFF75 **rtmpStream.getId() > 0**
+              rnote right admin #C8FFFF : rtmp_streams id가 0보다 크면 **rtmp_stream_status** 빼고 업데이트
+              admin -> database ++ : **<<rtmp_streams **rtmp_stream_status** 빼고 업데이트: buildRtmpStreamEntityToUpdate>>**\nUPDATE rtmp_streams **withOut rtmp_stream_status**
+              return int
+            else #FFE3EE
+              rnote right admin #C8FFFF : rtmp_streams 가 없으면 등록
+              admin -> database ++ : **<<rtmp_streams 등록: buildRtmpStreamEntityToCreate>>**\nINSERT rtmp_streams
+              return int
+            end
+          end
+        end
+      end
+    end
+
+  return rtmp_streams 리스트
+end
+
+@@enduml

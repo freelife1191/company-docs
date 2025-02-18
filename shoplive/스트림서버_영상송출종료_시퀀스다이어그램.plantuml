@@ -1,0 +1,169 @@
+@@startuml
+
+title "Stream Server 영상송출종료 시퀀스다이어그램"
+
+participant "송출장비" as broadcast
+participant lb [
+    =AWS NLB
+    ----
+    ""stream-lb:1935/stream""
+]
+box "Stream Server" #LightGreen
+participant manager [
+    =Nginx RTMP
+    ----
+    ""Stream Manager""
+]
+participant httpserver [
+    =Node.js Express
+    ----
+    ""Http Server""
+]
+participant worker [
+    =Nginx RTMP
+    ----
+    ""Stream Worker""
+]
+end box
+box "Api Server" #LightBlue
+participant bo [
+    =Api Server
+    ----
+    ""Bussiness Objects""
+]
+participant s3 [
+    =AWS S3
+    ----
+    ""shoplive-resource""
+]
+end box
+
+== Manager 스트림 송출종료 ==
+
+broadcast -> lb ++ : 방송송출종료
+
+    lb -> manager ++ : 방송송출종료
+
+        group  exec_publish_done(방송종료시)
+            alt#Gold #LightBlue **role == manager**
+                manager -> httpserver ++ : **<<스트림 서버 비활성화(on_stream_inactive)>>**\nDELETE Worker IP Cache\n/proxy/${streamKey}/inactive 
+                return HttpStatus OK
+            end
+        end
+
+        group on_publish(방송중단 Worker로 비동기 HTTP Proxy 콜백 동작)
+            rnote left worker
+            Worker가 Proxy RTMP 스트림 송출중단 결과 코드 콜백호출
+            endrnote
+            worker -> httpserver : **<<Proxy RTMP스트림 송출 중단>>**\nrtmp://${workerIp}:1935/stream/${streamKey}
+            httpserver -> manager : 송출중단
+        end
+    return
+return
+
+== Worker 스트림 송출종료 ==
+
+group  exec_publish_done(방송종료시)
+    group check_restreaming(stop): Mirror서버 송출종료
+        worker -> bo ++ : **<<스트림 Mirror서버 송출정보 조회>>**\n/v2/live/mirrors/${streamKey}
+        return live_mirros
+        alt#Gold #LightBlue **cmd == stop**
+            rnote right worker
+            mirror서버 스트림 송출 종료: $mirrorStreamUrl/$mirrorStreamKey
+            endrnote
+            worker -> bo ++ :**<<MIRROR_STATUS 값 STOP 변경>>**\nPUT /v2/live/mirrors/${liveMirrorId}/status/STOP
+            return HttpStatus OK
+        end
+    end
+
+    alt#Gold #LightBlue **role == worker**
+        worker -> bo ++ : **<<스트림 서버 비활성화(on_stream_inactive)>>**\nrtmp_streams(STOP), ON_AIR: stream_servers(RESERVE)(\n/v2/live/event/onStreamInactive?streamKey=${streamKey}
+        return HttpStatus OK
+    end
+
+    group move_ts_to_s3(hls m3u8, ts파일 S3로 이동)
+        rnote right worker
+        streamKey에 noarchive가 포함되어있으면 m3u8, ts파일 삭제하고 종료
+        endrnote
+
+        worker -> bo ++ : **<<Archivable 여부 조회>>**\nGET /v2/live/archivable/${name}
+        return archivable(1), noarchivable(0)
+
+        rnote right worker
+        archivable가 0이면 m3u8, ts파일 삭제하고 종료 
+        endrnote
+
+        worker -[#Blue]> s3 : **<<m3u8, ts파일 S3 이동>>**\ns3://shoplive-resource/videos/hls/{streamKey}_{resolution}/{fileName}
+    end
+
+    group make_mp4_and_move_ts_to_s3(hls-hd mp4파일 생성 및 m3u8, ts파일 S3로 이동)
+        rnote right worker
+        streamKey에 noarchive가 포함되어있으면 m3u8, ts파일 삭제하고 종료
+        endrnote
+
+        worker -> bo ++ : **<<Archivable 여부 조회>>**\nGET /v2/live/archivable/${name}
+        return archivable(1), noarchivable(0)
+
+        rnote right worker
+        archivable가 0이면 m3u8, ts파일 삭제하고 종료 
+        endrnote
+
+        rnote right worker #96FFFF
+        mp4 파일 생성
+        endrnote 
+
+        worker -[#Blue]> s3 : **<<mp4파일 생성 및 mp4 S3로이동>>**\ns3://shoplive-resource/videos/archive/{mp4Filename}
+
+        rnote right worker #96FFFF
+        mp4 S3로이동 후 삭제
+        endrnote
+
+        worker -[#Blue]> s3 : **<<m3u8, ts파일 S3 이동>>**\ns3://shoplive-resource/videos/hls-hd/{streamKey}_{resolution}/{fileName}
+    end
+end
+
+group exec_record_done(녹화완료시)
+    group upload_archive(keyframe 생성 및 archive 영상 S3 업로드)
+        rnote right worker
+        filesize가 512000byte 보다 작으면 exit 1 종료
+        endrnote 
+
+        note right worker
+        uploadlock파일이 있으면 exit 1 종료
+        endrnote
+
+        rnote right worker
+        streamKey에 noarchive가 포함되어있으면 exit 0 종료
+        endrnote
+
+        worker -> bo ++ : **<<Archivable 여부 조회>>**\nGET /v2/live/archivable/${name}
+        return archivable(1), noarchivable(0)
+
+        rnote right worker
+        archivable가 0이면 uploadlock파일 삭제하고 exit 0 종료 
+        endrnote
+
+        worker -> bo ++ : **<<campaignTitle 조회>>**\nGET /v2/live/campaignTitle/${streamkey}
+        return campaignTitle
+
+        worker -[#Blue]> s3 : **<<Archive영상 flv파일 S3 이동>>**\ns3://shoplive-resource/videos/archive/{campaignTitle}.flv
+
+        worker -> bo ++ : **<<Archive영상정보 저장>>**\n/v2/live/event/stream/archived/${streamkey}\nlive_stream_archives에 데이터 저장
+        return HttpStatus OK
+
+        worker -> httpserver ++ : **<<Keyframe이미지처리 요청>>**\n/archived/${streamkey}/keyframe
+
+            httpserver -> httpserver : **<<Keyframe이미지추출>>**
+            httpserver -[#Blue]> s3 : **<<Keyframe이미지 S3 이동>>**\ns3://shoplive-resource/videos/keyframe/{streamKey}/{streamKey}_%05d.jpg
+
+            httpserver -> bo ++ : **<<Keyframe이미지정보 저장>>**\n/v1/live/event/stream/archived/${streamKey}/keyframe?fileName=${fileName}\nlive_stream_archive_keyframes에 데이터 저장
+            return HttpStatus OK
+
+        return HttpStatus OK
+
+        rnote right worker #96FFFF
+        스크립트 처리 완료후 flv, uploadlock 파일 삭제
+        endrnote
+    end
+end
+@@enduml
