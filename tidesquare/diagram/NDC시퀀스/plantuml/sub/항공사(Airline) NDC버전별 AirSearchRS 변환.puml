@@ -1,0 +1,123 @@
+@startuml
+
+title **항공사(Airline) NDC버전별 AirSearchRS 변환**
+
+participant "ConvertShopping[VERSION]" as versionConvertShopping
+participant NdcResponseErrorHandler as ndcResponse
+
+group #DarkTurquoise AirShoppingRS 변환
+    ?o-> versionConvertShopping ++ : ConvertShoppingService.convertRS(List<AirShoppingRS>.get(0), AirportMapInfo)
+    note left of versionConvertShopping
+    **ConvertShoppingService**의 구현체 버전에 따라
+    **AirShoppingRS** 데이터를 셋팅하여 응답
+    end note
+
+    alt #LightCyan AirShoppingRS.error.isNotEmpty() && AirShoppingRS.response == null
+        group #IMPLEMENTATION AirShoppingRS 유효성 검증
+            versionConvertShopping -> ndcResponse ++ : throwValidNdcMessage(AirShoppingRS)
+            note right of ndcResponse: **<size:18>버전별로 계속 추가되는 형식 개선 대상!!</size>**
+            note right of ndcResponse
+            NDC에서 응답받은 **AirShoppingRS**에 대해 **버전별로 유효성 검증**
+
+            **항공사로 부터 내려오는 에러중 아래에 맵핑되는 Polarpie 에러들이 있는지 검증 없으면 50599로 처리**
+
+            **errorMap**
+            ("420", "50501"); // Not Available but Waitlist is Open
+            ("421", "50501"); // Not Available and Waitlist is Closed
+            ("422", "50501"); // Not Available Due to Traffic Restrictions
+            ("325230000002", "50243"); // Invalid or Expired Offer
+            ("325230000042", "50244"); // OrderItem specified already ticketed
+            ("325240000002", "50244"); // OrderItem specified already ticketed
+            ("325230000033", "50330"); // OrderItem specified already ticketed
+            ("911", "50250"); // RESERVATION PREVIOUSLY CANCELLED
+            ("710", "50199"); // NO JOURNEY FOUND FOR REQUESTED ITINERARY
+            ("50199", "50199"); // NO JOURNEY FOUND FOR REQUESTED ITINERARY
+            ("325520101370", "50256"); // Cannot add duplicate seat elements for the same traveler and segment. Please remove existing seat first and then add the new seat
+            ("368BKG_BOE_1628#No access to overbook flight.", "50235");
+
+            **polarpieErrorMap**
+            ("50501", "Waitlist is closed");
+            ("50243", "Invalid or Expired Offer");
+            ("50244", "OrderItem specified already ticketed");
+            ("50235", "No access to overbook flight");
+            ("50330", "NDC Order discrepancy error. Order has been modified externally. Use FLX API to display PNR");
+            ("50203", "UNABLE TO CREATE ORDER");
+            ("50250", "PNR previously cancelled");
+            ("50199", "No query results.");
+            ("50256", "Cannot add duplicate seat elements for the same traveler and segment. Please remove existing seat first and then add the new seat.");
+            end note
+
+            alt #LightCyan errorMap.get(errorType.code) != null
+                alt #LightCyan polarpieErrorMap.get(polarpieCode) != null)
+                    critical #Salmon BookingEngineException
+                        ndcResponse <[#red]--o?: ""throw new BookingEngineException""\n""(polarpieCode, (String) polarpieErrorMap.get(polarpieCode))""
+                    end
+                else #LavenderBlush polarpieErrorMap.get(polarpieCode) == null)
+                    critical #Salmon BookingEngineException
+                        ndcResponse <[#red]--o?: ""throw new BookingEngineException""\n""(50599, "[value|shortText] Airline response error")""
+                    end
+                else #LavenderBlush errorType.code.equals("911")
+                    alt #LightCyan shortText().equals("PNR previously cancelled")
+                        note right of ndcResponse
+                            polarpieCode = "50250"
+                        end note
+                    end
+                    alt #LightCyan shortText != null
+                        note right of ndcResponse
+                            polarpieCode = (String) errorMap.get(code + shortText);
+                        end note
+                    end
+                end
+            else
+                alt #LightCyan shortText != null)
+                    critical #Salmon BookingEngineException
+                        ndcResponse <[#red]--o?: ""throw new BookingEngineException""\n""(50599, (String)msg)""
+                    end
+                end
+            end
+            critical #Salmon BookingEngineException
+                versionConvertShopping <[#red]--ndcResponse: ""throw BookingEngineException""
+            end
+            critical #Salmon IllegalStateException || NullPointerException || Exception
+                note right of ndcResponse: **<size:18>비어 있음 메세지 처리 필요!!</size>**
+            end
+            versionConvertShopping <[#red]-- ndcResponse -- : ""AirSearchRS""
+        end
+    else #LavenderBlush AirShoppingRS.error.isNotEmpty() && AirShoppingRS.response != null
+        critical #Salmon Exception
+            versionConvertShopping <[#red]--o?: ""throw new BookingEngineException""\n""("50199", "No query results.")""
+        end
+    end
+
+    alt #LightCyan onPoint.isEmpty() && offPoint.isEmpty()
+        critical #Salmon Exception
+            versionConvertShopping <[#red]--o?: ""throw new BookingEngineException""\n""("50599", "AirShoppingRS Can't Find OnOffPoint")""
+        end
+    end
+
+    critical #Salmon BookingEngineException
+        versionConvertShopping -[#red]>o? : ""log.error""
+        note left of versionConvertShopping
+            **[AirSearchRS에 Error 메세지 맵핑]**
+            **resultCode(errCd)**
+            **resultMessage(errMg)**
+        end note
+    end
+    critical #Salmon Exception
+        versionConvertShopping -[#red]>o? : ""log.error""
+        note left of versionConvertShopping
+            **[AirSearchRS에 Error 메세지 맵핑]**
+            **resultCode("50150")**
+            **resultMessage("Results build error")**
+        end note
+    end
+    critical #Salmon finally
+        note left of versionConvertShopping
+            **[AirSearchRS에 AirShoppingRSBuilder 대입]**
+        end note
+        versionConvertShopping -[#blue]>o? : ""log.debug""
+    end
+    ?o<-- versionConvertShopping -- : ""(Object)AirShoppingRS""
+end
+
+@enduml

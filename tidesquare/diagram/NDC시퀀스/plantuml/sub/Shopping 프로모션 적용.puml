@@ -1,0 +1,28 @@
+@startuml
+
+title **Shopping 프로모션 적용**
+
+participant ShoppingPromotionService
+participant PromotionRepository
+database MongoDB as mongo
+
+?o-> ShoppingPromotionService ++ : applyPromotionAirSearchRS\n(responseId, DATA, tripType, ShoppingConsoleInfo)
+
+alt #LightCyan shoppingConsoleInfo != null
+    note right of ShoppingPromotionService: 프로모션 정보(PromotionInfo) 셋팅
+    ShoppingPromotionService -> PromotionRepository ++ : saveOfferPromotionInfo\n(PromotionInfo)
+    alt #LightCyan PromotionInfo.isNotEmpty()
+        PromotionRepository -> mongo --: save("expireAt=2880분", "offerpromotioninfo")
+        critical #Salmon JsonProcessingException
+            PromotionRepository -[#red]>o?: ""e.printStackTrace()""
+        end
+    end
+    note right of ShoppingPromotionService: AirSearchRS Offer 객체에 프로모션 데이터 셋팅
+    deactivate ShoppingPromotionService
+end
+
+critical #Salmon Exception
+    ShoppingPromotionService -[#red]>o?: ""e.printStackTrace()""
+end
+ShoppingPromotionService -[#blue]>o?: ""log.debug""
+@enduml

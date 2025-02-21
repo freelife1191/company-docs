@@ -1,0 +1,67 @@
+@startuml
+
+title **[POST] AirSearch**
+
+actor User
+participant OfferController
+participant OfferService
+participant AirSearchCacheService
+User o-> OfferController ++ : POST: /search(AirSearchRQ, useMeta)
+
+' Critical
+OfferController --> OfferController: ValidationAirSearchRQ()
+
+critical #Salmon BookingEngineException
+    note right of User
+        **[Validation 검증 실패시 아래의 에러들이 발생]**
+        ("50132", "The 'AgencyID' value is required.")
+        ("50131", "The 'Query' value is required.")
+        ("50102", "The 'Origin' value is required.")
+        ("50103", "The 'Destination' value is required.")
+        ("50113", "Select 'Origin' and 'Destination' pairs")
+        ("50111", "The 'DepartDate' value is required.")
+        ("50114", "The 'ReturnDate' value is required.")
+        ("50118", "The 'Passenger' value is required.")
+        ("50119", "The maximum number of passengers that can be requested is {9} persons.")
+        ("50106", "The 'TripType' value is required.")
+    end note
+    User o<-- OfferController: ""throw new BookingEngineException""
+end
+
+alt #LightCyan useMeta.isPresent()
+    ' if
+    OfferController -> AirSearchCacheService ++ : findCache(AirSearchRQ)
+    ' Reference
+    group SequenceDiagram 분리 작성 참고
+        note right of OfferController
+        **[AirSearch 캐싱 조회]**
+        ""AirSearchCacheService.findCache(AirSearchRQ)""
+        end note
+    end
+    OfferController <-- AirSearchCacheService -- : AirSearchRS
+else #LavenderBlush useMeta.isNotPresent()
+    ' else
+    OfferController -> OfferService ++ : AirSearchRQ
+    ' Reference
+    group SequenceDiagram 분리 작성 참고
+        note right of OfferController
+        **[AirSearch 조회]**
+        ""OfferService.search(AirSearchRQ)""
+        end note
+    end
+    OfferController <-- OfferService -- : ""AirSearchRS""
+end
+
+critical #Salmon BookingEngineException
+    note right of User
+        **[AirSearchRS에 Error(CODE(errCd), MESSAGE(errMg))메세지 맵핑]**
+    end note
+end
+critical #Salmon Exception
+    note right of User
+        **[AirSearchRS에 Error(CODE("50151), MESSAGE("Invalid query results"))메세지 맵핑]**
+    end note
+end
+
+User o<-- OfferController -- : ""AirSearchRS""
+@enduml

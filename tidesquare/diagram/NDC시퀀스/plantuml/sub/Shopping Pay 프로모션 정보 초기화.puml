@@ -1,0 +1,38 @@
+@startuml
+
+title **Shopping Pay 프로모션 정보 초기화**
+
+participant ShoppingFopPromotionService
+participant FopPromotionDataProvider
+box #Lavender
+    participant AMS
+end box
+
+ ?o-> ShoppingFopPromotionService ++ : initShoppingFopPromotionInfo\n(objAirshoppingRQ, agencyId, siteCd)
+ShoppingFopPromotionService -> FopPromotionDataProvider ++ : getConsoleFopPromotionData\n(objAirshoppingRQ, agencyId, siteCd)
+
+group #Turquoise NDC 버전별 PromotionRequest Parameter Maker
+    FopPromotionDataProvider -> FopPromotionDataProvider: makeShoppingPromotionRequestData\n(objAirShoppingRQ, agencyId, siteCd)
+    FopPromotionDataProvider <--? : ""Map<String, Object> params""
+end
+
+alt #LightCyan params.isNotEmpty()
+    FopPromotionDataProvider -[#blue]>o?: ""log.info""
+    ' REST API
+    group #gold REST API
+        note right of FopPromotionDataProvider: **<size:18>MockService 개발 대상!!</size>**
+        FopPromotionDataProvider -> AMS ++ : **GET** <i>[[http://amsapi.tourvis.com]]/api/pay-promotion/get?{params}</i>
+        FopPromotionDataProvider <-- AMS -- : ""PayPromotionInfoResponse""
+    end
+end
+
+critical #Salmon NullPointerException
+    FopPromotionDataProvider -[#blue]>o?: ""log.info""
+end
+critical #Salmon Exception
+    FopPromotionDataProvider -[#blue]>o?: ""log.info""
+end
+
+ShoppingFopPromotionService <-- FopPromotionDataProvider -- : ""PayPromotionInfo""
+?o<-- ShoppingFopPromotionService -- : ""PayPromotionInfo""
+@enduml

@@ -1,0 +1,52 @@
+@startuml
+
+title **최근 본 여행 삭제**
+
+box #PaleGreen
+actor Front
+end box
+box #Lavender
+participant RVT [
+    =최근 본 여행
+    ----
+    Omakase
+]
+participant RS [
+    =최근 검색
+    ----
+    Omakase
+]
+participant RV [
+    =최근 조회
+    ----
+    Omakase
+]
+end box
+database "Redis[Cache]" as Redis
+database "MySQL[RDBMS]" as MySQL
+
+Front -> RVT++: 최근 본 여행 삭제 요청
+
+group #LightBlue 최근 조회 삭제 (Async)
+    RVT o-> RV++: **최근 조회 삭제 요청 (Async)**
+    RV -> MySQL++: 최근 조회 History 삭제 대상 조회
+    RV <-- MySQL--
+    RV -> MySQL!!: 최근 조회 History 삭제
+    RV -> MySQL++: 최근 조회 Last 조회
+    RV <-- MySQL--
+    RV -> MySQL!!: 최근 조회 Last 삭제
+    RVT <-- RV--: 최근 조회 삭제 응답
+end
+group #LightPink 최근 검색 삭제 (Async)
+    RVT o-> RS++: **최근 검색 삭제 요청 (Async)**
+    RS -> Redis++: 최근 검색 삭제 대상 확인
+    RS <-- Redis--
+    RS -> Redis!!: 최근 검색 삭제
+    RVT <-- RS--: 최근 검색 삭제 응답
+end
+
+RVT -> RVT: 최근 조회, 최근 검색 삭제 결과 병합
+
+Front <-- RVT--: 최근 본 여행 삭제 응답
+
+@enduml

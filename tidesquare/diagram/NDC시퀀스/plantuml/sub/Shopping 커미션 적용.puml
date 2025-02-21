@@ -1,0 +1,28 @@
+@startuml
+
+title **Shopping 커미션 적용**
+
+participant ShoppingCommissionService
+participant CommissionRepository
+database MongoDB as mongo
+
+ ?o-> ShoppingCommissionService ++ : applyCommissionAirSearchRS\n(AirSearchRQ, responseId, DATA, tripType, PayPromotionInfo)
+
+alt #LightCyan ShoppingConsoleInfo != null
+    note right of ShoppingCommissionService: 커미션 정보(CommissionInfo) 셋팅
+    ShoppingCommissionService -> CommissionRepository ++ : saveOffercommissionInfo\n(CommissionInfo)
+    alt #LightCyan CommissionInfo.isNotEmpty()
+        CommissionRepository -> mongo --: save("expireAt=2880분", "offercommissioninfo")
+        critical #Salmon JsonProcessingException
+            CommissionRepository -[#red]>o?: ""e.printStackTrace()""
+        end
+    end
+    
+    note right of ShoppingCommissionService: AirSearchRS Offer 객체에 커미션 데이터 셋팅
+end
+
+critical #Salmon Exception
+    ShoppingCommissionService -[#red]>o?: ""e.printStackTrace()""
+end
+ShoppingCommissionService -[#blue]>o?: ""log.debug""
+@enduml

@@ -1,0 +1,28 @@
+@startuml
+
+title **Shopping Pay 프로모션 적용**
+
+participant ShoppingFopPromotionService
+participant FopPromotionRepository
+database MongoDB as mongo
+
+ ?o-> ShoppingFopPromotionService ++ : applyFopPromotionAirSearchRS\n(AirSearchRQ, responseId, DATA, tripType, PayPromotionInfo)
+
+alt #LightCyan PayPromotionInfo != null
+    note right of ShoppingFopPromotionService: Pay 프로모션 정보(FopPromotionInfo) 셋팅
+    ShoppingFopPromotionService -> FopPromotionRepository ++ : saveOfferFopPromotionInfo\n(FopPromotionInfo)
+    alt #LightCyan FopPromotionInfo.isNotEmpty()
+        FopPromotionRepository -> mongo --: save("expireAt=2880분", "offerfoppromotioninfo")
+        critical #Salmon JsonProcessingException
+            FopPromotionRepository -[#red]>o?: ""e.printStackTrace()""
+        end
+    end
+    
+    note right of ShoppingFopPromotionService: AirSearchRS Offer 객체에 Pay 프로모션 데이터 셋팅
+end
+
+critical #Salmon Exception
+    ShoppingFopPromotionService -[#red]>o?: ""e.printStackTrace()""
+end
+ShoppingFopPromotionService -[#blue]>o?: ""log.debug""
+@enduml

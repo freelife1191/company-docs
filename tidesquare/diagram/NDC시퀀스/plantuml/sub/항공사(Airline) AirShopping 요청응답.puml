@@ -1,0 +1,168 @@
+@startuml
+
+title **항공사(Airline) AirShopping 요청/응답**
+
+participant "AirShopping[VERSION]Service" as versionAirShoppingService
+database Mapper as mapper
+database MySQL as mysql
+
+?o-> versionAirShoppingService ++ : airShopping((Object)AirShoppingRQ)
+alt #LightCyan objAirShoppingRQ instanceof AirShoppingRQ
+    ' MySQL Select
+    group #Aqua MySQL Select AgencyProviderList
+        note right of versionAirShoppingService: ""AgencyProviderMapper""
+        versionAirShoppingService -> mapper ++ : getAgencyProviderByAgencyId\n(agencyId, servieName, standardCode, standardVersion)
+        mapper -> mysql ++ : SELECT TB_CM_AGENCY ...
+        mapper <-- mysql -- : ""List<AgencyProvider>""
+        versionAirShoppingService <-- mapper -- : ""List<AgencyProvider>""
+    end
+
+    group SequenceDiagram 분리 작성 참고
+        versionAirShoppingService ->o?: RouteInfoDataProvider.getRouteInfo\n((Object)AirShoppingRQ, agencyId, siteCd)
+        note right of versionAirShoppingService
+        **[사이트별 노출 구간 제어를 위한 조회(RouteInfo)]**
+        ""RouteInfoDataProvider.getRouteInfo((Object)AirShoppingRQ, agencyId, siteCd)""
+        end note
+        versionAirShoppingService <--o?: ""RouteInfo""
+    end
+
+    alt #LightCyan List<AgencyProvider>.isEmpty() && RouteInfo == null
+        critical #Salmon IOException
+            ?o<-- versionAirShoppingService: ""throw new AggregatorException""\n""("90151", "Not found airlines routes.")""
+        end
+    else #LavenderBlush List<AgencyProvider>.isNotEmpty() && RouteInfo != null
+        group rsGroupId 생성
+            ' note over versionAirShoppingService
+            note right of versionAirShoppingService
+            **ResponseGroupMngService.makeRsGroupId()**를 통해
+            responseGroupIdPrefix를 UUID와 날짜등의 값을 조합하여 생성 
+            end note
+        end
+
+        loop #Violet AgencyProvider : List<AgencyProvider>
+            ' MySQL Select
+            group #Aqua MySQL Select AirlineList
+                note right of versionAirShoppingService: ""AgencyProviderMapper""
+                versionAirShoppingService -> mapper ++ : getProviderAirlines(providerId)
+                mapper -> mysql ++ : SELECT TB_CM_AIRLINE ...
+                mapper <-- mysql -- : ""List<String>""
+                versionAirShoppingService <-- mapper -- : ""List<String>""
+            end
+
+            note right of versionAirShoppingService: 공급사에서 제공하는 그룹 항공사 코드를 가져옴. ex, LH
+            ' MySQL Select
+            group #Aqua MySQL Select AirlineGroupCode
+                note right of versionAirShoppingService: ""AgencyMapper""
+                versionAirShoppingService -> mapper ++ : getGroupAirlineTwoCode(airlineCode, providerId)
+                mapper -> mysql ++ : SELECT TB_CM_AIRLINE ...
+                mapper <-- mysql -- : ""String""
+                versionAirShoppingService <-- mapper -- : ""String""
+            end
+            
+            alt #LightCyan oraRecipientAirlineID.isNotEmpyt()
+                alt !oraRecipientAirlineID.equals(airlineGroupCode)
+                    group #Chocolate continue
+                        note right of versionAirShoppingService: Recipient 가 존재하는 요청은 요청한 항공사만 제외한다
+                        versionAirShoppingService ->o?: continue
+                    end
+                end
+            end
+
+            alt #LightCyan "0000".equals(resCd)
+                group twoCodeList 생성
+                    ' note over versionAirShoppingService
+                    note right of versionAirShoppingService
+                    **AbstractShoppingConsoleFilter.checkSxTx()**를 통해
+                    routeAirlineList에서 필터링하여 twoCodeList를 추출 
+                    end note
+                end
+            end
+            alt #LightCyan twoCodeList.isNotEmpty()
+                note right of versionAirShoppingService: 항공사 정기점검 기간 설정
+                alt #LightCyan AirlineMaintenance != null
+                    ' MySQL Select
+                    group #Aqua MySQL Select AirlineMaintenance
+                        note right of versionAirShoppingService: ""AirlineMaintenanceMapper""
+                        versionAirShoppingService -> mapper ++ : getAirlineMaintenance(twoCode, providerId)
+                        mapper -> mysql ++ : SELECT TB_AG_AIRLINE_MAINTENANCE ...
+                        mapper <-- mysql -- : ""AirlineMaintenance""
+                        versionAirShoppingService <-- mapper -- : ""AirlineMaintenance""
+                    end
+
+                    alt #LightCyan AirlineMaintenance != null
+                        alt #LightCyan closeStartDate.before(nowDate) && closeEndDate.after(nowDate)
+                            group #Chocolate continue
+                                note right of versionAirShoppingService
+                                현재날짜가 **closeStartDate** 이전이고
+                                **closeEndDate** 이후이면 true
+                                end note
+                                versionAirShoppingService ->o?: continue
+                            end
+                        end
+                    end
+
+                    note right of versionAirShoppingService
+                    AgencySalesPtc
+                    LH, BA INF 조회 제외처 ( 개발계 에서만 동작안하도록 변경 )
+                    end note
+
+                    ' MySQL Select
+                    group #Aqua MySQL Select AgencySalesPtc
+                        note right of versionAirShoppingService: ""AgencySalesPtcMapper""
+                        versionAirShoppingService -> mapper ++ : getAgencySalesPtc(agencyId, providerId, airlineGroupCode)
+                        mapper -> mysql ++ : SELECT TB_AG_AIRLINE_MAINTENANCE ...
+                        mapper <-- mysql -- : ""List<AgencySalesPtc>""
+                        versionAirShoppingService <-- mapper -- : ""List<AgencySalesPtc>""
+                    end
+
+                    alt #LightCyan !checkAgencySalesPtc(pax, List<AgencySalesPtc>)
+                        ' Logger
+                        versionAirShoppingService -[#blue]>o?: ""log.info""
+                        group #Chocolate continue
+                            note right of versionAirShoppingService: 판매 대상 PTC 타입이 아님
+                            versionAirShoppingService ->o?: continue
+                        end
+                    end
+
+                    note right of versionAirShoppingService: TransactionIdentifier 값 설정
+                    note right of versionAirShoppingService: SENDER 에 AGENCY 정보를 셋팅해서 호출\nIATA 정보 설정
+                    note right of versionAirShoppingService: ORA Recipient 를 Group 항공사 코드로 설정
+                    note right of versionAirShoppingService: ORA Recipient 설정 END
+
+                    === (Async) 항공사(Airline) 요청/응답 시작 ===
+                    group SequenceDiagram 분리 작성 참고
+                        note right of versionAirShoppingService
+                        [<color:blue>**(Async)**</color> **항공사(Airline) NDC 요청/응답]**
+                        ""NdcClient.requestAsync()""
+                        end note
+                    end
+                    === (Async) 항공사(Airline) 요청/응답 끝 ===
+                end
+            end
+
+        end
+    end
+    critical #Salmon AggregatorException
+        ' Logger
+        versionAirShoppingService -[#blue]>o?: ""log.info""
+        note right of versionAirShoppingService
+            **[AirSearchRS에 Error 메세지 맵핑]**
+            **error.code(errCd)**
+            **error.descText(errMg)**
+            **AirShoppingRSList(AirShoppingRS)**
+        end note
+    end
+
+    critical #Salmon Exception
+        ' Logger
+        versionAirShoppingService -[#blue]>o?: ""log.info""
+        note right of versionAirShoppingService
+            **[AirSearchRS에 Error 메세지 맵핑]**
+            **error.code("50199")**
+            **error.descText("No query result")**
+            **AirShoppingRSList(AirShoppingRS)**
+        end note
+    end
+end
+?o<-- versionAirShoppingService -- : ""List<AirShoppingRS>""
+@enduml

@@ -1,0 +1,317 @@
+@startuml
+title **(Async) 항공사(Airline) NDC 요청/응답**
+
+participant "AirShopping[VERSION]Service" as versionAirShoppingService
+participant NdcClient
+participant "TransactionService[Airline]" as airlineTransaction
+box #LavenderBlush
+    participant Airline
+end box
+
+versionAirShoppingService o-[#blue]>> NdcClient: <color:blue>**[Async]**</color> requestAsync(AirShoppingRQ, AgencyProvider)
+
+    ' Util 사용
+    group #DarkTurquoise AirShoppingRQ 타입 지정
+        NdcClient ->o?: ApplyCommonMsgData.apply((Object)AirSearchRQ, AgencyProvider)
+        ' note over versionAirShoppingService
+        note right of NdcClient
+        여행사+항공사+서비스 별 {ServiceName}RQ/Party/Sender 설정을 위한 서비스
+
+        **ApplyCommonMsgData.apply(Object, AgencyProvider)**를 통해
+        **setDocument**, **setTravelAgencySender**, **setDirectPreference** 메서드를 통해
+        **AirShoppingRQ** 데이터를 셋팅하고 리턴
+        end note
+        NdcClient <-o?: ""AirSearchRQ""
+    end
+
+
+    group SequenceDiagram 분리 작성 참고
+        NdcClient ->o?: NDCMarshallUnMarshallService.marshall(AirShoppingRQ, standardVersion, providerCode, serviceCode)
+        note right of NdcClient
+        **[JaxbContext Marshall]**
+        ""NDCMarshallUnMarshallService.marshall(T request, String version, String providerCode, String serviceCode)""
+
+        항공사 응답에 사용할 XML데이터를 Parsing
+        **PROVIDERCODE(FLX, IBX, POLARIUM, BA, AMADEUS)**
+        **NDCVERSION(V152, V161, V162, V172, V181)**
+        **SERVICECODE(AIRSHOPPINGRQ ...)**
+
+        에 따라 알맞은 **JaxbContext** 인스턴스를 생성해서
+        ""marshall"" 처리
+        end note
+        NdcClient <-o?: ""(String) marshalledRQ""
+    end
+
+
+    ' transaction start ================================================================================
+    group #SandyBrown TransactionService 항공사 구현체 셋팅
+        NdcClient ->o?: TransactionServiceProvider.getTransactinService(AgencyProvider)
+        note right of NdcClient
+        **AgencyProvider**의 
+
+        **PROVIDERCODE(FLX, IBX, POLARIUM, BA, AMADEUS)**
+        **NDCVERSION(V152, V161, V162, V172, V181)**
+
+        에 따라 알맞은 항공사의 **TransactionService** 구현체를 응답
+        end note
+
+        NdcClient <--o?: ""TransactionService""
+        critical #Salmon AggregatorException
+            ' Logger
+            NdcClient <[#red]--o? : ""throw new AggregatorException""\n""(~"","Transaction Service is null")""
+        end
+    end
+    ' transaction end ================================================================================
+
+    ' airlineTransaction start ================================================================================
+    NdcClient -> airlineTransaction ++ : TransactionService[Airline].sendRequest(TransactionParams)
+
+        group SequenceDiagram 분리 작성 참고
+            airlineTransaction ->o?: TransactionCredentialService.getCredential(TransactionParams)
+            note right of airlineTransaction
+            **[항공사(Airline) Transaction Credential 조회]**
+            ""TransactionCredentialService.getCredential(TransactionParams)""
+            end note
+            airlineTransaction <--o?: Credential[Airline]
+
+            alt Credential[Airline] == null
+                critical #Salmon JAXBException
+                    ' Logger
+                    airlineTransaction <[#red]--o?: ""throw new AggregatorException""\n""(~"","Can't find FLX Credential Information ("agencyId/providerCode")""
+                end
+            end
+        end
+
+        note right of airlineTransaction: **항공사(Airline)와 통신을 위한 XXClient 데이터 생성**
+
+        === Airline 요청/응답 시작 ===
+        note right of airlineTransaction: **<size:18>MockService 개발 대상!!</size>**
+        note right of airlineTransaction #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+        group #STRATEGY NDC RQ로그 파일생성
+            airlineTransaction ->o?: LogServiceProvider.logServiceNDCRQProvider\n(TransactionParams, LogParams, AirSearchRQ)
+            group #BurlyWood LogService(LogParam 셋팅)
+                note right of airlineTransaction
+                    **LogServiceProvider.logServiceNDCRQProvider()** 에서
+                    **callLogService()** 를 호출해 hostname, serverTimestamp, serverIp를 추가하여
+                    **LogParams** 셋팅
+                end note
+            end
+            airlineTransaction ->o?: TransactionFileLogger.writeLog()
+            group #BurlyWood TransactionFileLogger(XML파일 로그 생성)
+                note right of airlineTransaction
+                    **logs/providerCode/yyyyMMdd/HHmmss_airlineCode_serviceCode.xml**
+                    경로에 **LogParams**에 셋팅된 로그 파일 생성
+                end note
+            end
+        end
+
+        group #DodgerBlue NDC 요청/응답
+            airlineTransaction -> Airline ** : XXClient.transaction(request)
+            activate Airline
+            note right of airlineTransaction
+            **XXClient**에 각 항공사(Airline)별 HOST정보를 셋팅하고 **TransactionParams**을 전송 후 응답받음
+            end note
+            airlineTransaction <-- Airline -- : ""(String)response""
+            critical #Salmon Exception
+                airlineTransaction <[#red]-o?: ""throw  DataFormatException || IOException || HttpErrorException""\n""|| NoSuchAlgorithmException|| KeyStoreException || CertificateException""\n""|| KeyManagementException || UnrecoverableKeyException""\n""|| NoSuchProviderException""
+            end
+        end
+
+        group #STRATEGY NDC RS로그 파일생성
+            airlineTransaction ->o?: TransactionFileLogger.writeLog()
+            group #BurlyWood TransactionFileLogger(XML파일 로그 생성)
+                note right of airlineTransaction
+                    **logs/providerCode/yyyyMMdd/HHmmss_airlineCode_serviceCode.xml**
+                    경로에 **LogParams**에 셋팅된 로그 파일 생성
+                end note
+            end
+            airlineTransaction ->o?: LogServiceProvider.logServiceNDCRSProvider()
+            group #BurlyWood LogService(LogParam 셋팅)
+                note right of airlineTransaction
+                    **LogServiceProvider.logServiceNDCRSProvider()** 에서
+                    **callLogService()** 를 호출해 hostname, serverTimestamp, serverIp를 추가하여
+                    **LogParams** 셋팅
+                end note
+            end
+            critical #Salmon HttpErrorException
+                ' Logger
+                airlineTransaction -[#blue]>o?: ""log.info""
+                airlineTransaction -> Airline: XXClient.disconnect()
+                critical #Salmon Exception
+                    note right of airlineTransaction: disconnection Exception 예외처리
+                    airlineTransaction -[#blue]>o?: ""log.info""
+                end
+                airlineTransaction <[#red]--o?: ""throw new AggregatorException""\n""(serverStatus(), faultString())""
+            end
+            critical #Salmon Exception
+                note right of airlineTransaction: 에러메시지 셋팅 **errorMsg transaction/exception= e.getMessage()**
+                airlineTransaction <[#red]--o?: ""throw new AggregatorException""\n""("50599", e.getMessage())""
+            end
+        end
+
+        === Airline 요청/응답 끝 ===
+
+        group #MediumAquaMarine Agency별 항공사(Airline) 호출수 제한 확인
+            group SequenceDiagram 분리 작성 참고
+                airlineTransaction ->o? : AgencyPerdayCallCountMapper.getPerdayCallCount(agencyId, providerCode, airlineCode)
+                note right of airlineTransaction
+                **[Agency 일일 요청 수 조회]**
+                ""AgencyPerdayCallCountMapper.getPerdayCallCount(agencyId, providerCode, airlineCode)""
+                end note
+                airlineTransaction <-o?: ""AgencyPerdayCallCount""
+            end
+
+            alt #LightCyan AgencyPerdayCallCount != null
+                note right of airlineTransaction: **AirlineCallCount.perDayCallLimit** 에 **perDayCallCount**값을 셋팅 
+            else #LavenderBlush AgencyPerdayCallCount == null
+                note right of airlineTransaction: **AirlineCallCount.perDayCallLimit** 에 **9999999**값을 셋팅 
+            end
+            
+            ' MongoDB Cache
+            group #GreenYellow NDC 항공사별 최대 호출수 MongoDB 조회 및 저장
+                airlineTransaction ->o?: AirlineCallCountRepository.addAirlineCallCountRequestCount(AirlineCallCount)
+                note right of airlineTransaction
+                **AirlineCallCountRepository.addAirlineCallCountRequestCount(AirlineCallCount)**
+                조회 조건(**countedDate**,**serviceCode**,**providerCode**,**airlineCode**)
+
+                호출수가 초과 됐는지 검증 후 아래의 메세지들을 Mail과 Slack으로 전송
+
+                "호출수가 초과하여 더이상 조회가 되지 않습니다."
+                "최대 호출수 근접 알림 (90%)"
+
+                초과하지 않았으면 조회된 호출수에 + 1하여 저장
+                end note
+
+                group #Thistle MailSmsService
+                    note right of airlineTransaction #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+                    airlineTransaction ->o?: MailSmsService.sendDeveloperNotificationMail()
+                    note right of airlineTransaction
+                        **MailSmsService.sendDeveloperNotificationMail()** 에서
+                        메일 내용을 생성한다음
+                        **sendDeveloperNotification()**를 호출해
+                        "[NDC] 오류 발생 알림(providerCode) profile" 메일 발송
+                    end note
+                end
+
+                group #Thistle SlackNotificationService
+                    note right of airlineTransaction #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+                    airlineTransaction ->o?: SlackNotificationService.send()
+                    note right of airlineTransaction
+                        **SlackNotificationService.send()** 에서
+                        슬랙 전송 내용을 생성한다음
+                        "NDC 오류발생 알림(hostname : %s, provider : %s) DATE" 슬랙 전송
+                    end note
+                end
+            end
+
+            critical #Salmon Exception
+                group #Thistle MailSmsService
+                    note right of airlineTransaction #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+                    airlineTransaction ->o?: MailSmsService.sendDeveloperNotificationMail()
+                    note right of airlineTransaction
+                        **MailSmsService.sendDeveloperNotificationMail()** 에서
+                        메일 내용을 생성한다음
+                        **sendDeveloperNotification()**를 호출해
+                        "[NDC] 오류 발생 알림(providerCode) profile" 메일 발송
+                    end note
+                    ' Logger
+                    airlineTransaction -[#blue]>o?: ""log.info""
+                end
+
+                group #Thistle SlackNotificationService
+                    note right of airlineTransaction #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+                    airlineTransaction ->o?: SlackNotificationService.send()
+                    note right of airlineTransaction
+                        **SlackNotificationService.send()** 에서
+                        슬랙 전송 내용을 생성한다음
+                        "NDC 오류발생 알림(hostname : %s, provider : %s) DATE" 슬랙 전송
+                    end note
+                    ' Logger
+                    airlineTransaction -[#blue]>o?: ""log.info""
+                end
+                ' Logger
+                airlineTransaction -[#red]>o?: ""log.error""
+            end
+        end
+
+        critical #Salmon AggregatorHttpException || AggregatorException
+            group #BurlyWood LogService(LogParam 셋팅)
+                airlineTransaction ->o?: LogServiceProvider.logServiceExcpetionProvider\n(LogParams, "50151" "Invalid query results", StackTraceUtil.getStackTraceString(Exception))
+                note right of airlineTransaction
+                    **LogServiceProvider.logServiceExcpetionProvider()** 에서
+
+                    **LogParams**에 아래의 값들을 셋팅
+
+                    **resTime, resMsg, resStatus, errorMsg**을 셋팅하고
+                    **callLogService()** 를 호출해 **hostname, serverTimestamp, serverIp**를 추가 셋팅
+                    JSON 형태로 로그를 출력
+                end note
+                ' Logger
+                airlineTransaction -[#blue]>o?: ""log.info""
+            end
+            alt #LightCyan serviceCode.notEquals(SERVICECODE.AIRSHOPPINGRQ)
+                group #Thistle MailSmsService
+                    note right of airlineTransaction #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+                    airlineTransaction ->o?: MailSmsService.sendDeveloperNotificationMail()
+                    note right of airlineTransaction
+                        **MailSmsService.sendDeveloperNotificationMail()** 에서
+                        메일 내용을 생성한다음
+                        **sendDeveloperNotification()**를 호출해
+                        "[NDC] 오류 발생 알림(providerCode) profile" 메일 발송
+                    end note
+                    ' Logger
+                    airlineTransaction -[#blue]>o?: ""log.info""
+                end
+
+                group #Thistle SlackNotificationService
+                    note right of airlineTransaction #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+                    airlineTransaction ->o?: SlackNotificationService.send()
+                    note right of airlineTransaction
+                        **SlackNotificationService.send()** 에서
+                        슬랙 전송 내용을 생성한다음
+                        "NDC 오류발생 알림(hostname : %s, provider : %s) DATE" 슬랙 전송
+                    end note
+                    ' Logger
+                    airlineTransaction -[#blue]>o?: ""log.info""
+                end
+            end
+        end
+
+    NdcClient <-- airlineTransaction -- : ""(String)response""
+    ' airlineTransaction end ================================================================================
+
+    NdcClient -[#blue]>o?: ""log.debug""
+
+    group SequenceDiagram 분리 작성 참고
+        NdcClient ->o?: NDCMarshallUnMarshallService.unmarshall\n((String)response, standardVersion, providerCode, serviceCode)
+        note right of NdcClient
+        **[JaxbContext UnMarshall]**
+        ""NDCMarshallUnMarshallService.unmarshall""
+        ""(String response, String version, String providerCode, String serviceCode)""
+        
+        항공사 응답에 사용할 XML데이터를 Parsing
+        **PROVIDERCODE(FLX, IBX, POLARIUM, BA, AMADEUS)**
+        **NDCVERSION(V152, V161, V162, V172, V181)**
+        **SERVICECODE(AIRSHOPPINGRQ ...)**
+        
+        에 따라 알맞은 **JaxbContext** 인스턴스를 생성해서
+        ""unmarshall"" 처리
+        end note
+        NdcClient <-o?: ""(Object)Unmarshaller.unmarshal(StringReader)""
+
+        critical #Salmon JAXBException
+            NdcClient <[#red]--o?: ""throw new AggregatorException""\n""(~"","Jaxb Marshall Exception")""
+        end
+    end
+
+    critical #Salmon AggregatorException
+        ' Logger
+        NdcClient -[#red]>o?: ""log.error""
+    end
+    critical #Salmon Exception
+        ' Logger
+        NdcClient -[#red]>o?: ""log.error""
+    end
+
+versionAirShoppingService o<<[#blue]-- NdcClient: <color:blue>**[Async]**</color> ""CompletableFuture.completedFuture((Object)AirShoppingRS)""
+@enduml

@@ -1,0 +1,44 @@
+@startuml
+
+title **항공사(Airline) Map 정보 조회**
+
+' skinparam ParticipantPadding 20
+' skinparam BoxPadding 10
+
+header Page Header
+footer Page %page% of %lastpage%
+
+participant AirportMapService
+participant CachedDataProvider
+database MongoDB as mongo
+box #Lavender
+    participant AMS
+end box
+
+?o-> AirportMapService ++ : getAirportMapInfo\n(joinedAirportList)
+
+group #GreenYellow MongoDB AMS Cache 데이터 조회
+AirportMapService -> CachedDataProvider ++ : findAmsCachedData\n(params, AirportMapInfo.class)
+CachedDataProvider -> mongo ++ : findOne\n("where requestHash", Document.class, "amscachedata")
+CachedDataProvider <-- mongo -- : ""Document""
+AirportMapService <-- CachedDataProvider -- : ""AirportMapInfo""
+end
+
+alt #LightCyan **AirportMapInfo != null**
+    ?o<-- AirportMapService : ""AirportMapInfo""
+else #LavenderBlush
+    group #gold REST API
+        note right of AirportMapService: **<size:18>MockService 개발 대상!!</size>**
+        AirportMapService -> AMS ++ : **GET** <i>[[http://amsapi.tourvis.com]]/api/cityairport-map/get?cityCd={params}</i>
+        AirportMapService <-- AMS -- : ""AirportMapInfo""
+    end
+end
+
+critical #Salmon Exception
+    AirportMapService -[#blue]>o?: ""log.info""
+    ?o<-- AirportMapService : ""throw Exception""
+end
+
+?o<-- AirportMapService -- : ""AirportMapInfo""
+
+@enduml

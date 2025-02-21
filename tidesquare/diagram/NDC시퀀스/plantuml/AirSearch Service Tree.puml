@@ -1,0 +1,113 @@
+@startwbs
+* AirSearch 조회 컨트롤러(OfferController)
+** AirSearch 캐쉬 조회 서비스(AirSearchCacheService)
+*** AirSearch 캐쉬 그룹 Response 레파지토리(CacheGroupAirSearchRSRepository)
+**** AirSearch 캐쉬 Response 레파지토리(CacheAirSearchRSRepository)
+***** MongoDB
+*** AirSearch 조회 서비스(OfferService)
+
+**** 쇼핑 프로모션 서비스(ShoppingPromotionService)
+***** 프로모션 레파지토리(PromotionRepository)
+****** MongoDB
+
+**** 쇼핑 PAY 프로모션 서비스(ShoppingFopPromotionService)
+***** PAY 프로모션 레파지토리(FopPromotionRepository)
+****** MongoDB
+
+**** 쇼핑 커미션 서비스(ShoppingCommissionService)
+***** 커미션 레파지토리(CommissionRepository)
+****** MongoDB
+
+** AirSearch 조회 서비스(OfferService)
+
+*** 로그 서비스 공급자(LogServiceProvider)
+
+*** 공항 맵 서비스(AirportMapService)
+**** 캐쉬 데이터 공급자(CachedDataProvider)
+***** MongoDB
+**** AMS
+
+*** 에이전시 공급사 설정(AgencyProviderConfig)
+**** 에이전시 맵퍼(AgencyMapper)
+***** MySQL
+
+*** 변환 쇼핑 서비스 공급자(ConvertShoppingServiceProvider)
+**** 변환 쇼핑 서비스(ConvertShoppingService)
+***** 변환 쇼핑 NDC 버전별 서비스(ConvertShopping[VERSION])
+*** AirSearch 서비스 공급사(AirSearchServiceProvider)
+**** AirSearch 서비스(AirSearchService)
+*** 쇼핑 프로모션 서비스(ShoppingPromotionService)
+**** 콘솔 프로모션 데이터 공급자(ConsolePromotionDataProvider)
+***** AMS
+*** 쇼핑 PAY 프로모션 서비스(ShoppingFopPromotionService)
+**** PAY 프로모션 데이터 공급자(FopPromotionDataProvider)
+***** AMS
+*** Async 항공사(Airline) AirShopping 서비스(AsyncAirShoppingService)
+**** AirShopping 버전별 서비스(AirShopping[VERSION]Service)
+***** 에이전시 공급사 맵퍼(AgencyProviderMapper)
+****** MySQL
+***** 항공사(Airline) 라우터 정보 데이터 공급자(RouteInfoDataProvider)
+****** 캐시 데이터 공급자(CachedDataProvider)
+******* MongoDB
+****** AMS
+***** Response 그룹 매니저 서비스(ResponseGroupMngService)
+****** 활성 프로파일 서비스(ActivateProfileService)
+***** 에이전시 맵퍼(AgencyMapper)
+****** MySQL
+***** 추상 쇼핑 콘솔 필터(AbstractShoppingConsoleFilter)
+***** 항공사 메인터넌스 맵퍼(AirlineMaintenanceMapper)
+****** MySQL
+***** 에이전시 할인 PTC 맵퍼(AgencySalesPtcMapper)
+****** MySQL
+
+***** NdcClient
+
+****** 공통 메세지 데이터 적용(ApplyCommonMsgData)
+****** NDC Marhshall/UnMarshall 서비스(NDCMarshallUnMarshallService)
+******* Jaxb 컨텍스트 공급자(JaxbContextProvider)
+
+****** 트랜잭션 서비스 공급자(TransactionServiceProvider)
+******* 트랜잭션 서비스(TransactionService)
+
+****** 항공사별 트랜잭션 서비스(TransactionService[Airline])
+
+******* 트랜잭션 인증정보 서비스(TransactionCredentialService)
+******** 항공사별 트랜잭션 인증정보 서비스(TransactionCredentialService[Airline])
+********* 트랜잭션 인증정보 맵퍼(TransactionCredentialMapper)
+********** MySQL
+
+******* 로그 서비스 공급자(LogServiceProvider)
+******* 트랜잭션 파일 로거(TransactionFileLogger)
+
+******* XXClient
+******** Airline
+
+******* 트랜잭션 파일 로거(TransactionFileLogger)
+******* 로그 서비스 공급자(LogServiceProvider)
+
+******* 에이전시 일일 요청수 맵퍼(AgencyPerdayCallCountMapper)
+******** MySQL
+
+******* 항공사(Airline) 요청수 레파지토리(AirlineCallCountRepository)
+******** MongoDB
+
+******* 메일 SMS 서비스(MailSmsService)
+******* 슬랙 알람 서비스(SlackNotificationService)
+
+****** NDC Response 에러 핸들러(NdcResponseErrorHandler)
+
+*** 쇼핑 프로모션 서비스(ShoppingPromotionService)
+**** 프로모션 레파지토리(PromotionRepository)
+***** MongoDB
+
+*** 쇼핑 PAY 프로모션 서비스(ShoppingFopPromotionService)
+**** PAY 프로모션 레파지토리(FopPromotionRepository)
+***** MongoDB
+
+*** 쇼핑 커미션 서비스(ShoppingCommissionService)
+**** 커미션 레파지토리(CommissionRepository)
+***** MongoDB
+
+*** 로그 서비스 공급자(LogServiceProvider)
+
+@endwbs

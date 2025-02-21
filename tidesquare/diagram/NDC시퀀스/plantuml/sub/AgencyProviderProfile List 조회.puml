@@ -1,0 +1,62 @@
+@startuml
+
+title **AgencyProviderProfile List 조회**
+
+participant AgencyProviderConfig
+database Mapper as mapper
+database MySQL as mysql
+
+?o-> AgencyProviderConfig ++ : getAgencyProvider\n(AgencyID, SERVICECODE.AIRSHOPPINGRQ)
+
+' MySQL Select
+group #Aqua MySQL Select List<AgencyProviderProfile>
+    note right of AgencyProviderConfig: ""AgencyMapper""
+    AgencyProviderConfig -> mapper ++ : getAgencyProviderList(agencyId)
+    mapper -> mysql ++ : SELECT TB_CM_AGENCY ...
+    mapper <-- mysql -- : ""List<Map<String, Object>>""
+
+    critical #Salmon SQLException
+        AgencyProviderConfig <-- mapper: ""throw SQLException""
+    end
+    AgencyProviderConfig <-- mapper -- : ""List<Map<String, Object>>""
+end
+
+loop #Violet Map provider : List<Map<String, Object>>
+    alt #LightCyan providerType.equals("DIRECT")
+        ' MySQL Select
+        group #Aqua MySQL Select List<AgencyProviderProfile>
+            note right of AgencyProviderConfig: ""AgencyMapper""
+            AgencyProviderConfig -> mapper ++ : getDirectProviderInfoByAgencyIDAndProvderIdAndServiceCode\n(agencyId, provderId, serviceCode)
+            mapper -> mysql ++ : SELECT TB_CM_AGENCY_PROVIDER ...
+            mapper <-- mysql -- : ""List<AgencyProviderProfile>""
+
+            critical #Salmon SQLException
+                AgencyProviderConfig <-- mapper: ""throw SQLException""
+            end
+            AgencyProviderConfig <-- mapper -- : ""List<AgencyProviderProfile>""
+        end
+    else #LavenderBlush providerType.equals("AGGREGATOR")
+        ' MySQL Select
+        group #Aqua MySQL Select List<AgencyProviderProfile>
+            note right of AgencyProviderConfig: ""AgencyMapper""
+            AgencyProviderConfig -> mapper ++ : getAggProviderInfoByAgencyIdAndProvderIdAndServiceCode\n(agencyId, provderId, serviceCode)
+            mapper -> mysql ++ : SELECT TB_CM_AGENCY_PROVIDER ...
+            mapper <-- mysql -- : ""List<AgencyProviderProfile>""
+
+            critical #Salmon SQLException
+                AgencyProviderConfig <-- mapper: ""throw SQLException""
+            end
+            AgencyProviderConfig <-- mapper -- : ""List<AgencyProviderProfile>""
+        end
+    end
+end
+alt #LightCyan List<AgencyProviderProfile>.isEmpty()
+    critical #Salmon BookingEngineException
+        ?o<-- AgencyProviderConfig: ""throw new BookingEngineException""\n""(~"","Agency provider is not found")""
+    end
+end
+critical #Salmon SQLException
+    ?o<-- AgencyProviderConfig: ""throw new BookingEngineException""\n""(~"","Agency provider is not found")""
+end
+?o<-- AgencyProviderConfig -- : ""List<AgencyProviderProfile>""
+@enduml

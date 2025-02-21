@@ -1,0 +1,107 @@
+@startuml
+
+title **최근 본 여행 조회**
+
+box #PaleGreen
+actor Front
+end box
+box #Lavender
+participant RVT [
+    =최근 본 여행
+    ----
+    Omakase
+]
+participant RS [
+    =최근 검색
+    ----
+    Omakase
+]
+participant RV [
+    =최근 조회
+    ----
+    Omakase
+]
+participant LC [
+    =Local Cache
+    ----
+    Omakase
+]
+end box
+database "Redis[Cache]" as Redis
+database "MySQL[RDBMS]" as MySQL
+box #PaleVioletRed
+participant External [
+    =External
+    ----
+    외부 API
+]
+end box
+
+Front -> RVT++ : 최근 본 여행 조회 요청
+
+group #gold 최근 조회 Cleansing 처리 (Async)
+    RVT o-> RV++: **최근 조회 Cleansing (Async)**
+    RV -> MySQL++: History 조회
+    note Right RV: 각 유저의 로그인, 비로그인별 카테고리 타입별 ID 조회 Log가 저장된 Low Level 테이블
+    RV <-- MySQL--
+    group Expired 된 데이터 Cleansing
+        RV -> MySQL++: Last 조회
+        note Right RV: 성능 개선을 위해 카테고리 타입별로 ID, 조회시간을 하나의 ROW로 축약한 테이블
+        RV <-- MySQL--
+        RV -> MySQL!!: **History와 연결이 끊긴 Last 삭제**
+        RV -> RV: 로그인, 비로그인별 Expired History 추출
+        RV -> MySQL!!: **Expired된 BehaviorHistory 삭제**
+        RV -> RV: 로그인, 비로그인별 Expired Last 추출
+        RV -> MySQL!!: **Expired된 BehaviorLast 삭제**
+    end
+    group 로그인 시 idvsitor 데이터 merge
+        RV -> RV: IdType 별 데이터 분리
+        RV -> RV: 분리된 idvisitor 데이터를 member_no 에 merge
+        RV ->o MySQL--: merge된 member_no 업데이트
+    end
+end
+
+RVT -> RS++: 최근 검색 조회 요청
+group #SpringGreen 최근 검색 Cleansing 처리 (Async)
+    loop 최근 검색 카테고리 타입별 요청
+        RS -> Redis++: idvisitor 조회
+        RS <-- Redis--
+        RS -> Redis++: idvisitor와 동일한 memberNo 조회
+        RS <-- Redis--
+        RS -> RS: STEP1: memberNo에 idvisitor와\n동일한 데이터가 없는지 확인
+        RS -> RS: STEP2: memberNo가 idvisitor보다\n이전에 조회된지 확인
+        RS ->o Redis: 조건에 부합되면 idvisitor 데이터 merge
+    end
+end
+RVT <-- RS--: 최근 검색 조회 응답
+
+group #cyan 최근 본 여행 데이터로 변환 처리 (Async)
+    RVT o[#blue]-> RVT: **최근 검색 숙소, 상품 타입 제외시키고 추출 (Async)**
+    RVT o[#blue]-> RV++: **최근 검색 숙소, 상품 타입 추출 (Async)**
+    RV -> LC++: 로컬 캐시에서 타입별 상세 조회
+    LC -> External++: 로컬 캐시에 없는 데이터 외부 API 요청
+    LC <-- External--: 응답 데이터 Local Cache에 담기
+    RV <--LC--: 조회 타입으로 변환하여 응답
+    RVT <-- RV--: 최근 본 상품 타입으로 변환
+    RVT o[#OrangeRed]-> RV++: **최근 조회 조회 요청 (Async)**
+    RV -> MySQL++: 최근 조회 전체 카테고리 타입 조회 요청
+    RV <- MySQL--
+    group #gold 최근 조회 Cleansing 처리 (Async)
+        note right RV: 상세 FLOW 생략
+        RV o-> RV: **최근 조회 Cleansing (Async)**
+    end
+    RV -> LC++: 로컬 캐시에서 타입별 상세 조회
+    RV <-- LC--
+    RVT <-- RV--: 최근 본 상품 타입으로 변환 
+end
+
+group #LightCyan 최근 본 여행 응답 리스트 생성
+    RVT -> RVT: STEP1: 최근 검색, 최근 조회 병합
+    RVT -> RVT: STEP2: 최신 데이터 정렬 및 중복 제거
+    RVT -> RVT: STEP3: 최근 본 여행 일자별 그룹핑
+    RVT -> RVT: STEP4: 최근 본 여행 리스트 생성
+end
+
+Front <-- RVT--: 최근 본 여행 조회 응답
+
+@enduml

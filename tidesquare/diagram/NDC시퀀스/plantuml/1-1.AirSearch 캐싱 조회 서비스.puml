@@ -1,0 +1,121 @@
+@startuml
+
+title **AirSearch 캐싱 조회 서비스**
+
+participant OfferController
+participant OfferService
+participant AirSearchCacheService
+participant CacheGroupAirSearchRSRepository
+participant CacheAirSearchRSRepository
+participant MongoDB
+
+OfferController o-> AirSearchCacheService ++ : findCache(AirSearchRQ)
+group #GreenYellow MongoDB Cache 데이터 조회
+    AirSearchCacheService -> CacheGroupAirSearchRSRepository ++ : findOneByRequestHash(requestHash)
+    CacheGroupAirSearchRSRepository -> MongoDB ++ : findOne\n("where requestHash", Document.class, "CacheGroupAirSearchRS")
+    critical #Salmon IOException
+        CacheGroupAirSearchRSRepository -[#red]>o?: e.printStackTrace()
+    end
+    CacheGroupAirSearchRSRepository <-- MongoDB -- : ""Document""
+    AirSearchCacheService <-- CacheGroupAirSearchRSRepository -- : ""CacheGroupAirSearchRS""
+end
+
+
+alt #LightCyan CacheGroupAirSearchRS == null
+    ' Dependency Cycle
+    group #Gainsboro Dependency Cycle
+        Note right of OfferService: **<size:18>Dependency Cycle 제거 대상!!</size>**
+        OfferService <- AirSearchCacheService ++ #Gold: search(AirSearchRQ, usePromotion=false)
+        critical #Salmon Exception
+            ?o<[#red]- AirSearchCacheService: e.printStackTrace()
+        end
+        OfferService --> AirSearchCacheService -- : ""AirSearchRS""
+    end
+
+    alt #LightCyan AirSearchRS != null
+        alt #LightCyan offers.isNotEmpty()
+            group #GreenYellow MongoDB Cache 데이터 저장
+                note right of AirSearchCacheService
+                departureDate를 하루전 23:59:59로 변경
+                requestCount 1증가 후 Cache 데이터 저장
+                end note
+                AirSearchCacheService -> CacheGroupAirSearchRSRepository: save(CacheGroupAirSearchRS, DepartureDate)
+                AirSearchCacheService -> CacheAirSearchRSRepository: save(AirSearchRS)
+            end
+        end
+    end
+    ' SequenceDiagram 분리 작성
+    group SequenceDiagram 분리 작성 참고
+        note over AirSearchCacheService
+        **[프로모션 적용]**
+        ""AirSearchCacheService.applyPromotion(AirSearchRQ, AirSearchRS)""
+        end note
+    end
+else #LavenderBlush CacheGroupAirSearchRS != null
+    group #GreenYellow MongoDB RequestCount 증가
+        AirSearchCacheService -> CacheGroupAirSearchRSRepository ++: updateRequestCount(CacheGroupAirSearchRS)
+        CacheGroupAirSearchRSRepository -> MongoDB -- : updateFirst(query, update, "CacheGroupAirSearchRS")
+    end
+
+    group #GreenYellow MongoDB Cache 데이터 조회
+        AirSearchCacheService -> CacheGroupAirSearchRSRepository ++ : findOneByResponseId(getCachedResponseId())
+        CacheGroupAirSearchRSRepository -> MongoDB ++ : findOne\n("where DATA.Offers.ResponseID", Document.class, "CacheAirSearchRS")
+        critical #Salmon IOException
+            CacheGroupAirSearchRSRepository -[#red]>o?: e.printStackTrace()
+        end
+        CacheGroupAirSearchRSRepository <-- MongoDB -- : ""AirSearchRS""
+        AirSearchCacheService <-- CacheGroupAirSearchRSRepository --: ""AirSearchRS""
+    end
+
+    alt #LightCyan AirSearchRS == null
+        group #GreenYellow MongoDB RequestCount 증가
+            AirSearchCacheService -> CacheGroupAirSearchRSRepository ++ : updateRequestCount(CacheGroupAirSearchRS)
+            CacheGroupAirSearchRSRepository -> MongoDB --: updateFirst\n("where requestHash", "requestCount", "CacheGroupAirSearchRS")
+        end
+
+        group #GreenYellow MongoDB notFoundCachedDataCount 증가
+            AirSearchCacheService -> CacheGroupAirSearchRSRepository ++ : notFoundCachedDataCount(CacheGroupAirSearchRS)
+            CacheGroupAirSearchRSRepository -> MongoDB -- : updateFirst\n("where requestHash", "notFoundCachedDataCount", "CacheGroupAirSearchRS")
+        end
+
+        ' Dependency Cycle
+        group #Gainsboro Dependency Cycle
+            Note right of OfferService: **<size:18>Dependency Cycle 제거 대상!!</size>**
+            OfferService <- AirSearchCacheService ++ #Gold: search(AirSearchRQ, usePromotion=false)
+            critical #Salmon Exception
+                ?o<[#red]- AirSearchCacheService: e.printStackTrace()
+            end
+            OfferService --> AirSearchCacheService -- : ""AirSearchRS""
+        end
+        
+        group #GreenYellow MongoDB RequestCount 증가
+            AirSearchCacheService -> CacheGroupAirSearchRSRepository ++ : save(AirSearchRS)
+            CacheGroupAirSearchRSRepository -> MongoDB -- : save(basicDBObject, "CacheAirSearchRS")
+            Note left of MongoDB: expireDate(Day 23:59:59)
+        end
+
+        group #GreenYellow MongoDB ResponseID 추가
+            AirSearchCacheService -> CacheGroupAirSearchRSRepository ++ : addResponseID(requestHash, ResponseID)
+            CacheGroupAirSearchRSRepository -> MongoDB -- : updateMulti("where requestHash", "cachedResponseId", "CacheGroupAirSearchRS")
+            CacheGroupAirSearchRSRepository -[#blue]>o?: ""log.info""
+        end
+
+        group #GreenYellow MongoDB expireDate 증가
+            note right of AirSearchCacheService: **expireAt 300분 증가**
+            AirSearchCacheService -> CacheGroupAirSearchRSRepository ++ : updateExpiredDate(requestHash, departureDate)
+            CacheGroupAirSearchRSRepository -> MongoDB -- : updateFirst("where requestHash", "expireAt", "CacheGroupAirSearchRS")
+        end
+
+    else #LavenderBlush AirSearchRS != null
+        ' SequenceDiagram 분리 작성
+        group SequenceDiagram 분리 작성 참고
+            note over AirSearchCacheService
+            **[프로모션 적용]**
+            ""AirSearchCacheService.applyPromotion(AirSearchRQ, AirSearchRS)""
+            end note
+        end
+    end
+end
+
+OfferController o<-- AirSearchCacheService -- : ""AirSearchRS""
+@enduml

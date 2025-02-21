@@ -1,0 +1,39 @@
+@startuml
+
+title **Shopping 프로모션 정보 초기화**
+
+participant ShoppingPromotionService
+participant ConsolePromotionDataProvider
+box #Lavender
+    participant AMS
+end box
+
+ ?o-> ShoppingPromotionService ++ : initShoppingPromotionInfo\n(objAirshoppingRQ, siteCd)
+ShoppingPromotionService -> ConsolePromotionDataProvider ++ : getConsolePromotionData\n(objAirshoppingRQ, siteCd)
+
+group #Turquoise NDC 버전별 PromotionRequest Parameter Maker
+    ConsolePromotionDataProvider -> ConsolePromotionDataProvider: makeShoppingPromotionRequestData\n(objAirShoppingRQ, siteCd)
+    ConsolePromotionDataProvider <--? : ""Map<String, Object> params""
+end
+
+alt #LightCyan params.isNotEmpty()
+    ConsolePromotionDataProvider -[#blue]>o?: ""log.info""
+    ' REST API
+    group #gold REST API
+        note right of ConsolePromotionDataProvider: **<size:18>MockService 개발 대상!!</size>**
+        ConsolePromotionDataProvider -> AMS ++ : **GET** <i>[[http://amsapi.tourvis.com]]/api/gets?{params}</i>
+        ConsolePromotionDataProvider <-- AMS -- : ""AirportMapInfo""
+    end
+end
+
+critical #Salmon NullPointerException
+    ConsolePromotionDataProvider -[#blue]>o?: ""log.info""
+end
+critical #Salmon Exception
+    ConsolePromotionDataProvider -[#blue]>o?: ""log.info""
+    ShoppingPromotionService <-- ConsolePromotionDataProvider: ""throw Exception""
+end
+
+ShoppingPromotionService <-- ConsolePromotionDataProvider -- : ""ShoppingConsoleInfo""
+?o<-- ShoppingPromotionService -- : ""ShoppingConsoleInfo""
+@enduml

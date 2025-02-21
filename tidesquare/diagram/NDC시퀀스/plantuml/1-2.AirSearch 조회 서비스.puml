@@ -1,0 +1,343 @@
+@startuml
+title **AirSearch 조회 서비스**
+
+participant OfferController
+participant OfferService
+
+OfferController o-> OfferService ++ : search(AirSearchRQ, usePromotion=true)
+
+    group #BurlyWood LogService(LogParam 셋팅)
+        OfferService ->o?: LogServiceProvider.logServiceConvertRQProvider\n(siteCD, agencyID, LogParams, LogParams.ServiceType.AirShopping, toJsonString(AirSearchRQ, isPretty=false))
+        note right of OfferService
+            **LogServiceProvider.logServiceConvertRQProvider()** 에서
+
+            **LogParams**에 아래의 값들을 셋팅
+
+            **agencyId, siteId, jobCode, jobName, jobTransactionName**
+            **jobTransactionId, reqTime, reqMsg, serviceType, airLineCode**을 셋팅하고
+            **callLogService()** 를 호출해 **hostname, serverTimestamp, serverIp**를 추가 셋팅
+        end note
+    end
+
+    group SequenceDiagram 분리 작성 참고
+        OfferService ->o? : AirportMapService.getAirportMapInfo(joinedAirportList)
+        note right of OfferService
+        **[항공사(Airline) Map 정보 조회]**
+        ""AirportMapService.getAirportMapInfo(String)""
+        end note
+        OfferService <--o? : ""AirportMapInfo""
+    end
+
+    alt #LightCyan AirSearchRQ.query.recipient == null
+        group SequenceDiagram 분리 작성 참고
+            OfferService ->o? : AgencyProviderConfig.getAgencyProvider(agencyID, SERVICECODE.AIRSHOPPINGRQ)
+            note right of OfferService
+            **[AgencyProviderProfile List 조회]**
+            ""AgencyProviderConfig.getAgencyProvider((String)agencyID, (String)SERVICECODE)""
+            end note
+            OfferService <--o? : ""List<AgencyProviderProfile>""
+        end
+
+        loop #Violet AgencyProviderProfile : List<AgencyProviderProfile>
+            group #SandyBrown ConvertShoppingService 구현체 셋팅
+                OfferService ->o? : ConvertShoppingServiceProvider.getConvertorService(AgencyProviderProfile)
+                note right of OfferService
+                **ConvertShoppingServiceProvider**의 
+
+                **SERVICECODE(AIRSHOPPINGRQ ...)**
+                **NDCVERSION(V152, V161, V162, V172, V181)**
+
+                에 따라 알맞은 **ConvertShoppingService** 구현체를 응답
+                end note
+                OfferService <--o? : ""ConvertShoppingService""
+            end
+
+            alt #LightCyan ConvertShoppingService == null
+                group #Chocolate continue
+                    note right of OfferService
+                    **ConvertShoppingService** 가 null 이면
+                    end note
+                    OfferService ->o?: continue
+                end
+            end
+
+            group #SandyBrown AirShoppingService 구현체 셋팅
+                OfferService ->o? : getAirShoppingService\n(AgencyProviderProfile)
+                note right of OfferService
+                **AirSearchServiceProvider**의 
+
+                **PROVIDERCODE(FLX, IBX, POLARIUM, BA, AMADEUS)**
+                **STANDARDTYPE(NDC, FLX)**
+                **NDCVERSION(V152, V161, V162, V172, V181)**
+
+                에 따라 알맞은 항공사의 **AirShoppingService** 구현체를 응답
+                end note
+                OfferService <--o? : ""AirShoppingService""
+            end
+
+            group #DarkTurquoise AirShoppingRQ 변환
+                OfferService ->o? : ConvertShoppingService.convertRQ(AirSearchRQ, AgencyProviderProfile)
+                note right of OfferService
+                **ConvertShoppingService**의 구현체 버전에 따라
+                **AirShoppingRQ** 데이터를 셋팅하여 응답
+                end note
+                OfferService <--o? : ""(Object)AirShoppingRQ""
+            end
+
+            alt #LightCyan usePromotion == true
+                group SequenceDiagram 분리 작성 참고
+                    OfferService ->o? : ShoppingPromotionService.initShoppingPromotionInfo(objAirshoppingRQ, siteCd)
+                    note right of OfferService
+                    **[Shopping 프로모션 정보 초기화]**
+                    ""ShoppingPromotionService.initShoppingPromotionInfo(objAirshoppingRQ, siteCd)""
+                    end note
+                    OfferService <--o? : ""ShoppingConsoleInfo""
+                end
+
+                group SequenceDiagram 분리 작성 참고
+                    OfferService ->o? : ShoppingFopPromotionService.initShoppingFopPromotionInfo(objAirshoppingRQ, agencyId, siteCd)
+                    note right of OfferService
+                    **[Shopping Pay 프로모션 정보 초기화]**
+                    ""ShoppingFopPromotionService.initShoppingFopPromotionInfo(objAirshoppingRQ, agencyId, siteCd)""
+                    end note
+                    OfferService <--o? : ""PayPromotionInfo""
+                end
+                alt #LightCyan PayPromotionInfo != null
+                    note right of OfferService
+                    PayPromotionInfo 데이터가 있으면 변수에 대입
+                    ""payPromotionInfo = tmpPayPromotionInfo""
+                    end note
+                end
+                critical #Salmon Exception
+                    note right of OfferService: **<size:18>비어 있음 메세지 처리 필요!!</size>**
+                end
+            end
+
+            === (Async) 항공사(Airline) 요청/응답 시작 ===
+            group SequenceDiagram 분리 작성 참고
+                OfferService -[#blue]>>o?: AsyncAirShoppingService.request(AirShoppingService, (Object)AirShoppingRQ)
+                note right of OfferService
+                [<color:blue>**(Async)**</color> **항공사(Airline) AirShopping 요청/응답]**
+                ""AsyncAirShoppingService.request(AirShoppingService, (Object)AirShoppingRQ)""
+                end note
+                OfferService <<[#blue]--o? : ""CompletableFuture.completedFuture(List<Object>.get(0))""
+            end
+            === (Async) 항공사(Airline) 요청/응답 끝 ===
+
+            note right of OfferService
+            다중 요청 응답으로 얻은 **CompletableFuture** 로
+            ""List<HashMap<ConvertShoppingService, CompletableFuture>>"" 생성
+            end note
+        'loop end
+        end
+
+        loop #Violet HashMap data : List<HashMap<ConvertShoppingService, CompletableFuture>> 
+            note right of OfferService
+            ""List<HashMap<ConvertShoppingService, CompletableFuture>>""
+            루프문을 순회하며 응답받은 ""AirSearchRS"" 데이터를 변환처리
+            end note
+
+            group #DarkTurquoise SequenceDiagram 분리 작성 참고
+                OfferService ->o? : ConvertShoppingService.convertRS(List<AirShoppingRS>.get(0), AirportMapInfo)
+                note right of OfferService
+                **[항공사(Airline) NDC버전별 AirSearchRS 변환]**
+                ConvertShoppingService.convertRS(Object responseData, AirportMapInfo airportMapInfo)
+
+                **ConvertShoppingService**의 구현체 버전에 따라
+                **AirShoppingRS** 유효성을 검증하고 데이터를 컨버팅하여 응답
+                end note
+                OfferService <--o?: ""(Object)AirShoppingRS""
+            end
+
+            group #YellowGreen 변환된 AirSearchRS 병합 처리
+                OfferService -> OfferService : mergeAirSearchRS(List<AirSearchRS>)
+                OfferService <--o?: ""AirSearchRS""
+            end
+            critical #Salmon BookingEngineException
+                note right of OfferService: **<size:18>비어 있음 메세지 처리 필요!!</size>**
+            end
+            OfferService <--o?: ""(Object)AirShoppingRS""
+        end
+
+    else #LavenderBlush AirSearchRQ.query.recipient != null
+        note right of OfferService: AirLineCode(""airSearchRQ.getQuery().getRecipient()"")가 있으면
+
+        group SequenceDiagram 분리 작성 참고
+            OfferService ->o? : AgencyProviderConfig.getAgencyProvider(agencyID, SERVICECODE.AIRSHOPPINGRQ, recipient)
+            note right of OfferService
+            **[AgencyProviderProfile 단건 조회]**
+            ""AgencyProviderConfig.getAgencyProvider((String)agencyID, (String)SERVICECODE, (String)recipient)""
+            end note
+            OfferService <--o? : ""AgencyProviderProfile""
+        end
+
+        group #SandyBrown ConvertShoppingService 구현체 셋팅
+            OfferService ->o? : ConvertShoppingServiceProvider.getConvertorService(AgencyProviderProfile)
+            note right of OfferService
+            **ConvertShoppingServiceProvider**의 
+
+            **SERVICECODE(AIRSHOPPINGRQ ...)**
+            **NDCVERSION(V152, V161, V162, V172, V181)**
+
+            에 따라 알맞은 **ConvertShoppingService** 구현체를 응답
+            end note
+            OfferService <--o? : ""ConvertShoppingService""
+        end
+        group #DarkTurquoise AirShoppingRQ 변환
+            OfferService ->o? : ConvertShoppingService.convertRQ(AirSearchRQ, AgencyProviderProfile)
+            note right of OfferService
+            **ConvertShoppingService**의 구현체 버전에 따라
+            **AirShoppingRQ** 데이터를 셋팅하여 응답
+            end note
+            OfferService <--o? : ""(Object)AirShoppingRQ""
+        end
+
+        alt #LightCyan usePromotion == true
+            group SequenceDiagram 분리 작성 참고
+                OfferService ->o? : ShoppingPromotionService.initShoppingPromotionInfo(objAirshoppingRQ, siteCd)
+                note right of OfferService
+                **[Shopping 프로모션 정보 초기화]**
+                ""ShoppingPromotionService.initShoppingPromotionInfo(objAirshoppingRQ, siteCd)""
+                end note
+                OfferService <--o? : ""ShoppingConsoleInfo""
+            end
+
+            group SequenceDiagram 분리 작성 참고
+                OfferService ->o? : ShoppingFopPromotionService.initShoppingFopPromotionInfo(objAirshoppingRQ, agencyId, siteCd)
+                note right of OfferService
+                **[Shopping Pay 프로모션 정보 초기화]**
+                ""ShoppingFopPromotionService.initShoppingFopPromotionInfo(objAirshoppingRQ, agencyId, siteCd)""
+                end note
+                OfferService <--o? : ""PayPromotionInfo""
+            end
+        end
+
+        group #SandyBrown AirShoppingService 구현체 셋팅 
+            OfferService ->o? : getAirShoppingService\n(AgencyProviderProfile)
+            note right of OfferService
+            **AirSearchServiceProvider**의 
+
+            **PROVIDERCODE(FLX, IBX, POLARIUM, BA, AMADEUS)**
+            **STANDARDTYPE(NDC, FLX)**
+            **NDCVERSION(V152, V161, V162, V172, V181)**
+
+            에 따라 알맞은 항공사의 **AirShoppingService** 구현체를 응답
+            end note
+            OfferService <--o? : ""AirShoppingService""
+            
+            === 항공사(Airline) 요청/응답 시작 ===
+            group SequenceDiagram 분리 작성 참고
+                OfferService -[#blue]>o?: ""AirShoppingService.airShopping((Obejct)AirShoppingRQ)""
+                note right of OfferService
+                **[항공사(Airline) AirShopping 요청/응답]**
+                ""AirShoppingService.airShopping(Obejct)""
+                end note
+                OfferService <[#blue]--o?: ""List<AirShoppingRS>""
+            end
+            === 항공사(Airline) 요청/응답 끝 ===
+
+            critical #Salmon BookingEngineException
+                OfferService <[#red]--o?: ""throw new Exception("95005", "Aggregator service error")""
+            end
+        end
+        
+        group #DarkTurquoise SequenceDiagram 분리 작성 참고
+            OfferService ->o? : ConvertShoppingService.convertRS(List<AirShoppingRS>.get(0), AirportMapInfo)
+            note right of OfferService
+            **[항공사(Airline) NDC버전별 AirSearchRS 변환]**
+            ConvertShoppingService.convertRS(Object responseData, AirportMapInfo airportMapInfo)
+
+            **ConvertShoppingService**의 구현체 버전에 따라
+            **AirShoppingRS** 유효성을 검증하고 데이터를 컨버팅하여 응답
+            end note
+            OfferService <--o?: ""(Object)AirShoppingRS""
+        end
+    end
+
+    alt #LightCyan usePromotion == true
+        alt #LightCyan AirSearchRS.data != null
+            alt #LightCyan AirSearchRS.data.offers > 0
+                loop #Violet responseID : responseIDMap.values()
+                    group SequenceDiagram 분리 작성 참고
+                        OfferService ->o? : ShoppingFopPromotionService.applyPromotionAirSearchRS\n(AirSearchRQ, responseId, DATA, tripType, PayPromotionInfo)
+                        note right of OfferService
+                        **[Shopping Pay 프로모션 적용]**
+                        ""ShoppingFopPromotionService.applyPromotionAirSearchRS(AirSearchRQ, responseId, DATA, tripType, PayPromotionInfo)""
+                        end note
+                    end
+
+                    alt #LightCyan tripType().equals("RT") || tripType().equals("OW")
+                        group SequenceDiagram 분리 작성 참고
+                            OfferService ->o? : ShoppingPromotionService.applyPromotionAirSearchRS\n(responseId, DATA, tripType, ShoppingConsoleInfo)
+                            note right of OfferService
+                            **[Shopping 프로모션 적용]**
+                            ""ShoppingPromotionService.applyPromotionAirSearchRS(responseId, DATA, tripType, ShoppingConsoleInfo)""
+                            end note
+                        end
+                    end
+
+                    group SequenceDiagram 분리 작성 참고
+                        OfferService ->o? : ShoppingCommissionService.applyCommissionAirSearchRS\n(responseId, DATA, AirSearchRQ, ShoppingConsoleInfo, AirportMapInfo)
+                        note right of OfferService
+                        **[Shopping 커미션 적용]**
+                        ""ShoppingCommissionService.applyCommissionAirSearchRS(responseId, DATA, AirSearchRQ, ShoppingConsoleInfo, AirportMapInfo)""
+                        end note
+                    end
+                end
+            end
+        end
+    end
+
+    critical #Salmon BookingEngineException
+        group #BurlyWood LogService(LogParam 셋팅)
+            OfferService ->o?: LogServiceProvider.logServiceExcpetionProvider\n(LogParams, errCd, errMg, StackTraceUtil.getStackTraceString(BookingEngineException))
+            note right of OfferService
+                **LogServiceProvider.logServiceExcpetionProvider()** 에서
+
+                **LogParams**에 아래의 값들을 셋팅
+
+                **resTime, resMsg, resStatus, errorMsg**을 셋팅하고
+                **callLogService()** 를 호출해 **hostname, serverTimestamp, serverIp**를 추가 셋팅
+                JSON 형태로 로그를 출력
+            end note
+            ' Logger
+            OfferService -[#blue]>o?: ""log.info""
+            OfferService <[#red]--o?: ""throw Exception""
+        end
+    end
+    critical #Salmon Exception
+        group #BurlyWood LogService(LogParam 셋팅)
+            OfferService ->o?: LogServiceProvider.logServiceExcpetionProvider\n(LogParams, "50151" "Invalid query results", StackTraceUtil.getStackTraceString(Exception))
+            note right of OfferService
+                **LogServiceProvider.logServiceExcpetionProvider()** 에서
+
+                **LogParams**에 아래의 값들을 셋팅
+
+                **resTime, resMsg, resStatus, errorMsg**을 셋팅하고
+                **callLogService()** 를 호출해 **hostname, serverTimestamp, serverIp**를 추가 셋팅
+                JSON 형태로 로그를 출력
+            end note
+            ' Logger
+            OfferService -[#blue]>o?: ""log.info""
+        end
+    end
+
+    OfferService -[#blue]>o?: ""log.debug""
+
+    group #BurlyWood LogService(LogParam 셋팅)
+        OfferService ->o?: LogServiceProvider.logServiceConvertRSProvider\n(LogParams, toJsonString(AirSearchRS, isPretty=false))
+        note right of OfferService
+            **LogServiceProvider.logServiceConvertRSProvider()** 에서
+
+            **LogParams**에 아래의 값들을 셋팅
+
+            **resTime, resMsg**을 셋팅하고
+            **callLogService()** 를 호출해 **hostname, serverTimestamp, serverIp**를 추가 셋팅
+            JSON 형태로 로그를 출력
+        end note
+        ' Logger
+        OfferService -[#blue]>o?: ""log.info""
+    end
+
+OfferController o<-- OfferService -- : ""AirSearchRS""
+@enduml

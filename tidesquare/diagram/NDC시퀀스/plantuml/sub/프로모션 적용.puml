@@ -1,0 +1,95 @@
+@startuml
+
+title **프로모션 적용**
+
+participant AirSearchCacheService
+
+group SequenceDiagram 분리 작성 참고
+    AirSearchCacheService ->o? : AgencyProviderConfig.getAgencyProvider(AgencyID, SERVICECODE.AIRSHOPPINGRQ)
+    note right of AirSearchCacheService
+    **[AgencyProviderProfile List 조회]**
+    ""AgencyProviderConfig.getAgencyProvider(AgencyID, SERVICECODE.AIRSHOPPINGRQ)""
+    end note
+    AirSearchCacheService <--o? : ""List<AgencyProviderProfile>""
+end
+
+group #SandyBrown ConvertShoppingService 구현체 셋팅
+    AirSearchCacheService ->o? : ConvertShoppingServiceProvider.getConvertorService(AgencyProviderProfile)
+    note right of AirSearchCacheService
+    **ConvertShoppingServiceProvider**의 
+
+    **SERVICECODE(AIRSHOPPINGRQ ...)**
+    **NDCVERSION(V152, V161, V162, V172, V181)**
+
+    에 따라 알맞은 **ConvertShoppingService** 구현체를 응답
+    end note
+    AirSearchCacheService <--o? : ""ConvertShoppingService""
+end
+
+group SequenceDiagram 분리 작성 참고
+    AirSearchCacheService ->o? : ShoppingPromotionService.initShoppingPromotionInfo(objAirshoppingRQ, siteCd)
+    note right of AirSearchCacheService
+    **[Shopping 프로모션 정보 초기화]**
+    ""ShoppingPromotionService.initShoppingPromotionInfo(objAirshoppingRQ, siteCd)""
+    end note
+    AirSearchCacheService <--o? : ""ShoppingConsoleInfo""
+end
+
+group SequenceDiagram 분리 작성 참고
+    AirSearchCacheService ->o? : ShoppingFopPromotionService.initShoppingFopPromotionInfo(objAirshoppingRQ, agencyId, siteCd)
+    note right of AirSearchCacheService
+    **[Shopping Pay 프로모션 정보 초기화]**
+    ""ShoppingFopPromotionService.initShoppingFopPromotionInfo(objAirshoppingRQ, agencyId, siteCd)""
+    end note
+    AirSearchCacheService <--o? : ""PayPromotionInfo""
+end
+
+note right of AirSearchCacheService: loop문 돌면서 List<String> airportList 추가
+
+group SequenceDiagram 분리 작성 참고
+    AirSearchCacheService ->o? : AirportMapService.getAirportMapInfo(String)
+    note right of AirSearchCacheService
+    **[항공사(Airline) Map 정보 조회]**
+    ""AirportMapService.getAirportMapInfo(String)""
+    end note
+    AirSearchCacheService <--o? : ""AirportMapInfo""
+end
+
+alt #LightCyan AirSearchRS != null
+    alt #LightCyan offers.isNotEmpty()
+        group SequenceDiagram 분리 작성 참고
+            AirSearchCacheService ->o? : ShoppingFopPromotionService.applyPromotionAirSearchRS(AirSearchRQ, responseId, DATA, tripType, PayPromotionInfo)
+            note right of AirSearchCacheService
+            **[Shopping Pay 프로모션 적용]**
+            ""ShoppingFopPromotionService.applyPromotionAirSearchRS(AirSearchRQ, responseId, DATA, tripType, PayPromotionInfo)""
+            end note
+        end
+    else #LavenderBlush offers.isNotEmpty() && tripType.equals("RT") || tripType.equals("OW")
+        group SequenceDiagram 분리 작성 참고
+            AirSearchCacheService ->o? : ShoppingPromotionService.applyPromotionAirSearchRS(responseId, DATA, tripType, ShoppingConsoleInfo)
+            note right of AirSearchCacheService
+            **[Shopping 프로모션 적용]**
+            ""ShoppingPromotionService.applyPromotionAirSearchRS(responseId, DATA, tripType, ShoppingConsoleInfo)""
+            end note
+        end
+    else #LavenderBlush offers.isNotEmpty()
+        group SequenceDiagram 분리 작성 참고
+            AirSearchCacheService ->o? : ShoppingCommissionService.applyCommissionAirSearchRS(responseId, DATA, AirSearchRQ, ShoppingConsoleInfo, AirportMapInfo)
+            note right of AirSearchCacheService
+            **[Shopping 커미션 적용]**
+            ""ShoppingCommissionService.applyCommissionAirSearchRS(responseId, DATA, AirSearchRQ, ShoppingConsoleInfo, AirportMapInfo)""
+            end note
+        end
+    end
+
+end
+
+
+critical #Salmon BookingEngineException
+    AirSearchCacheService -[#blue]>o?: ""log.info""
+end
+critical #Salmon Exception
+    AirSearchCacheService -[#blue]>o?: ""log.info""
+end
+
+@enduml

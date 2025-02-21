@@ -1,0 +1,54 @@
+@startuml
+
+title **JaxbContext Marshall**
+
+participant NdcClient
+participant NDCMarshallUnMarshallService as marshall
+participant JaxbContextProvider as jaxb
+
+' mashall start ================================================================================
+NdcClient o-> marshall ++ : marshall(request, version, providerCode, serviceCode)
+
+    ' jaxb start  ================================================================================
+    marshall -> jaxb ++ : getMarshallContext(version, providerCode, serviceCode)
+        ' JaxbContext Marshall
+        group JaxbContext Marshall
+            note left of jaxb
+            항공사 요청/응답에 사용할 XML데이터를 Parsing
+            **PROVIDERCODE(FLX, IBX, POLARIUM, BA, AMADEUS)**
+            **NDCVERSION(V152, V161, V162, V172, V181)**
+            **SERVICECODE(AIRSHOPPINGRQ ...)**
+            
+            에 따라 알맞은 **JaxbContext** 인스턴스를 생성해서
+            ""marshall/unmarshall"" 처리
+            end note
+        end
+
+        critical #Salmon JAXBException
+            ' Logger
+            marshall <[#red]-- jaxb: ""throw JAXBException""
+        end
+
+    marshall <-- jaxb -- : ""JAXBContext""
+    ' jaxb end ================================================================================
+
+    critical #Salmon JAXBException
+        ' Logger
+        ?o<[#red]- marshall: ""log.error""
+        ?o<[#red]-- marshall: ""throw JAXBException""
+    end
+
+    critical #Salmon NullPointerException
+        ' Logger
+        ?o<[#red]-- marshall: ""log.error""
+        NdcClient o<[#red]-- marshall: ""throw NullPointerException""
+    end
+
+NdcClient o<-- marshall -- : ""StringWriter.toString()""
+
+critical #Salmon JAXBException
+    ' Logger
+    NdcClient o<[#red]--o?: ""throw new AggregatorException""\n""(~"","Jaxb Marshall Exception")""
+end
+' mashall end ================================================================================
+@enduml

@@ -1,0 +1,59 @@
+@startuml
+
+title **사이트별 노출 구간 제어를 위한 조회(RouteInfo)**
+
+participant RouteInfoDataProvider
+participant CachedDataProvider
+database MongoDB as mongo
+
+group #MediumAquaMarine 사이트별 노출 구간 제어를 위한 조회(RouteInfo)
+    ?o-> RouteInfoDataProvider ++ : getRouteInfo\n(AirShoppingRQ, agencyId, siteCd)
+
+    alt #LightCyan params.isNotEmpty()
+        ' MongoDB Cache
+        group #GreenYellow MongoDB AMS Cache 데이터 조회
+            RouteInfoDataProvider -> CachedDataProvider ++ : findAmsCachedData\n(params, RouteInfo.class)
+            CachedDataProvider -> mongo ++ : findOne\n("where requestHash", Document.class, "amscachedata")
+            critical #Salmon IOException
+                note right of CachedDataProvider: **<size:18>수정 대상!!</size>**
+                CachedDataProvider -[#red]>o?: e.printStackTrace()
+            end
+            CachedDataProvider <-- mongo -- : ""Document""
+            RouteInfoDataProvider <-- CachedDataProvider -- : ""RouteInfo""
+            alt #LightCyan RouteInfo != null
+                ?o<-- RouteInfoDataProvider: ""RouteInfo""
+            else #LavenderBlush RouteInfo == null
+                ' REST API
+                group #gold REST API
+                    note right of RouteInfoDataProvider: **<size:18>MockService 개발 대상!!</size>**
+                    RouteInfoDataProvider -> AMS ++ : **GET** <i>[[http://amsapi.tourvis.com]]/api/route-info/gets?{params}</i>
+                    RouteInfoDataProvider <-- AMS -- : ""RouteInfo""
+                end
+                RouteInfoDataProvider -> CachedDataProvider ++ : save(Map<String, Object> params, RouteInfo)
+                CachedDataProvider -> mongo -- : save\n("requestHash expireAt add 5min","amscachedata")
+                critical #Salmon JsonProcessingException
+                    note right of CachedDataProvider: **<size:18>수정 대상!!</size>**
+                    CachedDataProvider -[#red]>o?: e.printStackTrace()
+                end
+                critical #Salmon StackOverflowError
+                    note right of CachedDataProvider: **<size:18>수정 대상!!</size>**
+                    CachedDataProvider -[#red]>o?: e.printStackTrace()
+                end
+            end
+        end
+    end
+
+    critical #Salmon NullPointerException
+        note right of RouteInfoDataProvider: **<size:18>수정 대상!!</size>**
+        RouteInfoDataProvider -[#blue]>o?: ""log.info""
+    end
+
+    critical #Salmon Exception
+        note right of RouteInfoDataProvider: **<size:18>수정 대상!!</size>**
+        RouteInfoDataProvider -[#blue]>o?: ""log.info""
+        ?o<-- RouteInfoDataProvider: ""throw Exception""
+    end
+
+    ?o<-- RouteInfoDataProvider -- :""RouteInfo""
+end
+@enduml

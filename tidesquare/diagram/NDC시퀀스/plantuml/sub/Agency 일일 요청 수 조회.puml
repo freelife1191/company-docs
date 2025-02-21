@@ -1,0 +1,16 @@
+@startuml
+
+title **Agency 일일 요청 수 조회**
+
+database Mapper as mapper
+database MySQL as mysql
+
+' MySQL Select
+group #Aqua MySQL Select getPerdayCallCount
+    note right of mapper: ""AgencyPerdayCallCountMapper""
+    ?o-> mapper ++ : getPerdayCallCount\n(agencyId, providerCode, airlineCode)
+    mapper -> mysql ++ : SELECT TB_AG_AGENCY_PERDAYCALLCOUNT ...
+    mapper <-- mysql -- : ""AgencyPerdayCallCount""
+    ?o<-- mapper -- : ""AgencyPerdayCallCount""
+end
+@enduml

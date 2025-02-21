@@ -1,0 +1,26 @@
+@startuml
+title **(Async) 항공사(Airline) AirShopping 요청/응답**
+
+participant AsyncAirShoppingService
+
+?o-[#blue]>> AsyncAirShoppingService: <color:blue>**[Async]**</color> request\n(AirShoppingService, (Object)AirShoppingRQ)
+AsyncAirShoppingService -[#blue]>o?: ""log.info""
+
+group SequenceDiagram 분리 작성 참고
+    note left of AsyncAirShoppingService
+    **[항공사(Airline) AirShopping 요청/응답]**
+    ""AirShoppingService.airShopping(Obejct)""
+    end note
+end
+
+critical #Salmon BookingEngineException
+    ?o<<[#blue]-- AsyncAirShoppingService: ""throw new BookingEngineException(~"",~"")""
+end
+
+critical #Salmon Exception
+    ?o<<[#blue]-- AsyncAirShoppingService: ""throw new BookingEngineException(~"",~"")""
+end
+
+?o<<[#blue]-- AsyncAirShoppingService: <color:blue>**[Async]**</color> ""CompletableFutureList.completedFuture(Object)""
+
+@enduml

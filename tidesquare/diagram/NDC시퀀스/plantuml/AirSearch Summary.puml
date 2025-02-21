@@ -1,0 +1,261 @@
+@startuml
+
+title **[POST] AirSearch**
+
+actor User
+participant OfferController [
+    =Offer컨트롤러
+    ----
+    OfferController
+]
+participant OfferService [
+    =메인서비스
+    ----
+    OfferService
+]
+participant AirportMapService [
+    =공항Map서비스
+    ----
+    AirportMapService
+]
+participant AirShoppingService [
+    =AirShopping서비스
+    ----
+    AirShoppingService
+]
+box #Lavender
+    participant AMS [
+        =외부서비스
+        ----
+        AMS
+    ]
+end box
+box #LavenderBlush
+    participant Airline [
+        =외부서비스
+        ----
+        Airline
+    ]
+end box
+
+User o-> OfferController ++ : POST: /search(AirSearchRQ, useMeta)
+
+' Critical
+OfferController --> OfferController: ValidationAirSearchRQ()
+note right of OfferController
+    **[Validation 검증 실패시 에러 발생]**
+end note
+
+alt #LightCyan useMeta 가 있으면
+    ' if
+    group #Cyan MongoDB Cache 데이터 조회
+    OfferController ->o?: AirSearchCacheService.findCache(AirSearchRQ)
+    ' Reference
+        note right of OfferController
+        **[AirSearch 캐싱 조회]**
+        캐시가 없으면 ""OfferService.search(AirSearchRQ)"" 호출
+        요청 Agency RequestCount 증가
+        end note
+    OfferController <--o?: AirSearchRS
+    end
+else #LavenderBlush useMeta 가 없으면
+    ' else
+    OfferController -> OfferService ++ : OfferService.search(AirSearchRQ)
+
+    group #BurlyWood LogService(LogParam 셋팅)
+        OfferService ->o?: LogServiceProvider.logServiceConvertRQProvider\n(siteCD, agencyID, LogParams, LogParams.ServiceType.AirShopping, toJsonString(AirSearchRQ, isPretty=false))
+        note right of OfferService
+            **LogServiceProvider.logServiceConvertRQProvider()** 에서
+
+            **LogParams**에 아래의 값들을 셋팅
+
+            **agencyId, siteId, jobCode, jobName, jobTransactionName**
+            **jobTransactionId, reqTime, reqMsg, serviceType, airLineCode**을 셋팅하고
+            **callLogService()** 를 호출해 **hostname, serverTimestamp, serverIp**를 추가 셋팅
+        end note
+    end
+
+    ' Reference
+    note right of OfferController
+    **[AirSearch 조회 요청]**
+    end note
+    group 항공사(Airline) Map 정보 조회
+        OfferService -> AirportMapService ++ : AirportMapService.getAirportMapInfo(joinedAirportList)
+        group #GreenYellow MongoDB Cache 데이터 조회
+            AirportMapService ->o?: findAmsCachedData\n(params, AirportMapInfo.class)
+            AirportMapService <--o?: ""AirportMapInfo""
+        end
+        group #gold REST API
+            note right of AirportMapService: **<size:18>MockService 개발 대상!!</size>**
+            AirportMapService -> AMS ++ : **GET** <i>[[http://amsapi.tourvis.com]]/api/cityairport-map/get?cityCd={params}</i>
+            AirportMapService <-- AMS -- : ""AirportMapInfo""
+        end
+        OfferService <-- AirportMapService -- : ""AirportMapInfo""
+    end
+
+    group AgencyProviderProfile List 조회
+        OfferService ->o? : AgencyProviderConfig.getAgencyProvider(AgencyID, SERVICECODE.AIRSHOPPINGRQ)
+        OfferService <--o? : ""List<AgencyProviderProfile>""
+    end
+
+    loop #Violet AgencyProviderProfile List 크기만큼 반복문 처리
+        group #SandyBrown ConvertShoppingService 구현체 셋팅
+            OfferService ->o? : ConvertShoppingServiceProvider.getConvertorService(AgencyProviderProfile)
+            note right of OfferService
+            **ConvertShoppingServiceProvider**의 
+
+            **SERVICECODE(AIRSHOPPINGRQ ...)**
+            **NDCVERSION(V152, V161, V162, V172, V181)**
+
+            에 따라 알맞은 **ConvertShoppingService** 구현체를 응답
+            end note
+            OfferService <--o? : ""ConvertShoppingService""
+        end
+
+        group #SandyBrown AirShoppingService 구현체 셋팅
+            OfferService ->o? : getAirShoppingService\n(AgencyProviderProfile)
+            note right of OfferService
+            **AirSearchServiceProvider**의 
+
+            **PROVIDERCODE(FLX, IBX, POLARIUM, BA, AMADEUS)**
+            **STANDARDTYPE(NDC, FLX)**
+            **NDCVERSION(V152, V161, V162, V172, V181)**
+
+            에 따라 알맞은 항공사의 **AirShoppingService** 구현체를 응답
+            end note
+            OfferService <--o? : ""AirShoppingService""
+        end
+
+        group #DarkTurquoise 항공사(Airline) NDC버전별 AirShoppingRQ 변환
+            OfferService ->o? : ConvertShoppingService.convertRQ(AirSearchRQ, AgencyProviderProfile)
+            note right of OfferService
+            **ConvertShoppingService**의 구현체 버전에 따라
+            **AirShoppingRQ** 데이터를 셋팅하여 응답
+            end note
+            OfferService <--o? : ""(Object)AirShoppingRQ""
+        end
+
+        group Shopping 프로모션 정보 초기화
+            OfferService ->o? : ShoppingPromotionService.initShoppingPromotionInfo(objAirshoppingRQ, siteCd)
+            note right of OfferService
+            **[Shopping 프로모션 정보 초기화]**
+            end note
+            OfferService <--o? : ""ShoppingConsoleInfo""
+            OfferService ->o? : ShoppingFopPromotionService.initShoppingFopPromotionInfo(objAirshoppingRQ, agencyId, siteCd)
+            note right of OfferService
+            **[Shopping Pay 프로모션 정보 초기화]**
+            end note
+            OfferService <--o? : ""PayPromotionInfo""
+        end
+
+        group 항공사(Airline) 요청/응답
+            OfferService -> AirShoppingService ++ : <color:blue>**[Async]**</color> request\n(AirShoppingService, (Object)AirShoppingRQ)
+            group #DodgerBlue NDC 요청/응답
+                AirShoppingService -> Airline ++ : XXClient.transaction(request)
+                note right of AirShoppingService
+                **XXClient**에 각 항공사(Airline)별 HOST정보를 셋팅하고 **TransactionParams**을 전송 후 응답받음
+                end note
+                AirShoppingService <-- Airline -- : ""(String)response""
+            end
+            group #MediumAquaMarine Agency별 항공사(Airline) 호출수 제한 확인
+                AirShoppingService ->o? : AgencyPerdayCallCountMapper.getPerdayCallCount(agencyId, providerCode, airlineCode)
+                note right of AirShoppingService
+                **[Agency 일일 요청 수 조회]**
+                end note
+                AirShoppingService <-o?: ""AgencyPerdayCallCount""
+
+                group #GreenYellow NDC 항공사별 최대 호출수 MongoDB 조회 및 저장
+                    AirShoppingService ->o?: AirlineCallCountRepository.addAirlineCallCountRequestCount(AirlineCallCount)
+                    note right of AirShoppingService
+                    **AirlineCallCountRepository.addAirlineCallCountRequestCount(AirlineCallCount)**
+                    조회 조건(**countedDate**,**serviceCode**,**providerCode**,**airlineCode**)
+
+                    호출수가 초과 됐는지 검증 후 아래의 메세지들을 Mail과 Slack으로 전송
+
+                    "호출수가 초과하여 더이상 조회가 되지 않습니다."
+                    "최대 호출수 근접 알림 (90%)"
+
+                    초과하지 않았으면 조회된 호출수에 + 1하여 저장
+                    end note
+
+                    group #Thistle MailSmsService
+                        note right of AirShoppingService #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+                        AirShoppingService ->o?: MailSmsService.sendDeveloperNotificationMail()
+                        note right of AirShoppingService
+                            **MailSmsService.sendDeveloperNotificationMail()** 에서
+                            메일 내용을 생성한다음
+                            **sendDeveloperNotification()**를 호출해
+                            "[NDC] 오류 발생 알림(providerCode) profile" 메일 발송
+                        end note
+                    end
+
+                    group #Thistle SlackNotificationService
+                        note right of AirShoppingService #SpringGreen: **<size:18>기능 분리가 필요!!</size>**
+                        AirShoppingService ->o?: SlackNotificationService.send()
+                        note right of AirShoppingService
+                            **SlackNotificationService.send()** 에서
+                            슬랙 전송 내용을 생성한다음
+                            "NDC 오류발생 알림(hostname : %s, provider : %s) DATE" 슬랙 전송
+                        end note
+                    end
+                end
+            end
+        'end loop
+        end
+
+        loop #Violet 항공사(Airline) 응답 비동기 데이터 루프문 순회
+            group #DarkTurquoise 항공사(Airline) NDC버전별 AirSearchRS 변환
+                OfferService ->o? : ConvertShoppingService.convertRS(List<AirShoppingRS>.get(0), AirportMapInfo)
+                note right of OfferService
+                **[항공사(Airline) NDC버전별 AirSearchRS 변환]**
+                ConvertShoppingService.convertRS(Object responseData, AirportMapInfo airportMapInfo)
+
+                **ConvertShoppingService**의 구현체 버전에 따라
+                **AirShoppingRS** 유효성을 검증하고 데이터를 컨버팅하여 응답
+                end note
+                OfferService <--o?: ""(Object)AirShoppingRS""
+            end
+            OfferService <--o?: ""(Object)AirShoppingRS""
+        end
+
+        group Shopping 프로모션 적용
+            OfferService ->o? : ShoppingFopPromotionService.applyPromotionAirSearchRS\n(AirSearchRQ, responseId, DATA, tripType, PayPromotionInfo)
+            note right of OfferService
+            **[Shopping Pay 프로모션 적용]**
+            end note
+            OfferService ->o? : ShoppingPromotionService.applyPromotionAirSearchRS\n(responseId, DATA, tripType, ShoppingConsoleInfo)
+            note right of OfferService
+            **[Shopping 프로모션 적용]**
+            end note
+            OfferService ->o? : ShoppingCommissionService.applyCommissionAirSearchRS\n(responseId, DATA, AirSearchRQ, ShoppingConsoleInfo, AirportMapInfo)
+            note right of OfferService
+            **[Shopping 커미션 적용]**
+            end note
+        end
+        OfferService <<[#blue]-- AirShoppingService -- : <color:blue>**[Async]**</color> ""CompletableFutureList.completedFuture(Object)""
+    'end loop
+    end
+
+    group #BurlyWood LogService(LogParam 셋팅)
+        OfferService ->o?: LogServiceProvider.logServiceConvertRSProvider\n(LogParams, toJsonString(AirSearchRS, isPretty=false))
+        note right of OfferService
+            **LogServiceProvider.logServiceConvertRSProvider()** 에서
+
+            **LogParams**에 아래의 값들을 셋팅
+
+            **resTime, resMsg**을 셋팅하고
+            **callLogService()** 를 호출해 **hostname, serverTimestamp, serverIp**를 추가 셋팅
+        end note
+        ' Logger
+        OfferService -[#blue]>o?: ""log.info""
+    end
+
+    OfferController <-- OfferService -- : ""AirSearchRS""
+    note right of OfferController
+    **[AirSearch 조회 응답]**
+    end note
+end
+
+
+User o<-- OfferController -- : ""AirSearchRS""
+@enduml
